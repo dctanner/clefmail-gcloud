@@ -113,3 +113,27 @@ test("quoted display-name delimiters never become recipient mailboxes", async ()
   expect(await gmail.hasCorresponded("shop@example.com", message("b1"))).toBe(false);
   expect(await gmail.hasCorresponded("real@example.com", message("b1"))).toBe(true);
 });
+
+
+test("plus-tagged replies require a referenced sent message to the exact base recipient", async () => {
+  for (const recipient of ["dpo@coinbase.com", "other@coinbase.com", "dpo@other.com"]) {
+    const current = message("b1");
+    current.payload!.headers!.push({ name: "In-Reply-To", value: "<original@example.com>" });
+    const gmail = client(url => {
+      if (url.pathname.endsWith("/messages")) return Response.json({ messages:
+        url.searchParams.get("q")!.startsWith("in:sent rfc822msgid:") ? [{ id: "a0" }] : [] });
+      return Response.json({ id: "a0", labelIds: ["SENT"], payload: { headers: [
+        { name: "Message-ID", value: "<original@example.com>" }, { name: "To", value: recipient },
+      ] } });
+    });
+    expect(await gmail.hasCorresponded("dpo+noreply@coinbase.com", current)).toBe(recipient === "dpo@coinbase.com");
+  }
+});
+
+test("a plus alias without a reply reference cannot inherit trust from its base address", async () => {
+  const gmail = client(url => {
+    expect(url.searchParams.get("q")).not.toContain("rfc822msgid:");
+    return Response.json({ messages: [] });
+  });
+  expect(await gmail.hasCorresponded("dpo+noreply@coinbase.com", message())).toBe(false);
+});

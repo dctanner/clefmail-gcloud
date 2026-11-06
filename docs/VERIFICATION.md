@@ -26,7 +26,7 @@ The first challenge is an automatic reply with an `In-Reply-To` header when the 
 - Automated replies, mailing-list/bulk mail, null return paths, common no-reply addresses, auto-response suppression headers, and reported DMARC failures are archived **without** a challenge to avoid reply loops/backscatter. A later ordinary message from that pending sender can trigger the first challenge. The mailbox owner can also add the sender to Contacts; on subsequent processing, held messages are released.
 - Missing, duplicate, or malformed From headers cannot produce a safe destination: these messages are neither challenged nor automatically archived.
 - Contacts/API/storage failures retry instead of treating an unknown result as permission to archive. A failing message can delay later history processing.
-- Matching is case-insensitive exact email matching, not Gmail dot/plus alias or organization/domain trust. Google Contacts means People API contact connections, not inferred “Other contacts” or the Workspace directory.
+- Addresses use case-insensitive exact matching. A plus-tagged reply can also match its base address when its `In-Reply-To` or `References` header identifies a retained sent message addressed to that base address. For example, a reply from `dpo+noreply@example.com` can reference your message to `dpo@example.com`. Automated replies sent by Clefmail do not establish this relationship. Google Contacts means People API contact connections.
 
 ## Required permissions and migration
 

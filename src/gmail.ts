@@ -121,7 +121,7 @@ export class Gmail implements GmailPort {
     });
     if (format === "metadata")
       for (const name of ["From", "To", "Cc", "Bcc", "Subject", "Date", "Delivered-To", "X-Original-To",
-        "Message-ID", "Auto-Submitted", "List-Id", "Precedence", "Return-Path",
+        "Message-ID", "In-Reply-To", "References", "Auto-Submitted", "List-Id", "Precedence", "Return-Path",
         "X-Auto-Response-Suppress", "Authentication-Results"])
         query.append("metadataHeaders", name);
     const result = messageSchema.parse(await this.call(`messages/${encodeURIComponent(id)}?${query}`));
@@ -254,10 +254,33 @@ export class Gmail implements GmailPort {
         if (message.internalDate === current.internalDate && candidate.id >= current.id) continue;
         if (senderOf(message) === email && !message.labelIds?.includes("DRAFT")) return true;
       }
-      if (!result.nextPageToken) return false;
+      if (!result.nextPageToken) return this.hasSentReplyAlias(email, current);
       query.set("pageToken", result.nextPageToken);
     }
     throw new SafeError("correspondence_page_limit");
+  }
+
+  private async hasSentReplyAlias(email: string, current: Message): Promise<boolean> {
+    // A plus-tagged auto-reply can refer to mail sent to the base address.
+    // Require the actual sent message and matching recipient, not a domain match.
+    const [local, domain] = email.split("@");
+    if (!local!.includes("+")) return false;
+    const base = `${local!.split("+")[0]}@${domain}`;
+    const references = `${header(current, "In-Reply-To")} ${header(current, "References")}`;
+    const ids = [...new Set(references.match(/<[^<>\s]{1,998}>/g) || [])].slice(-20);
+    for (const id of ids) {
+      if (!/^<[a-zA-Z0-9.!#$%&'*+\/=?^_`{|}~@-]+>$/.test(id)) continue;
+      const query = new URLSearchParams({ q: `in:sent rfc822msgid:${id.slice(1, -1)}`, maxResults: "100" });
+      const result = z.object({ messages: z.array(z.object({ id: messageId })).default([]) })
+        .parse(await this.call(`messages?${query}`));
+      for (const candidate of result.messages) {
+        const sent = await this.message(candidate.id, "metadata");
+        if (!sent.labelIds?.includes("SENT") || header(sent, "Message-ID") !== id) continue;
+        if (header(sent, "Auto-Submitted").toLowerCase() === "auto-replied") continue;
+        if (["To", "Cc", "Bcc"].some(name => addresses(header(sent, name))?.includes(base))) return true;
+      }
+    }
+    return false;
   }
 
   async releaseHeld(id: string, heldLabel: string, restoreInbox: boolean): Promise<void> {

@@ -7,6 +7,7 @@ import type { GmailPort, LabelMap } from "./gmail.js";
 import { verifyMailbox } from "./gmail.js";
 import { header, mayChallenge, senderOf } from "./sender.js";
 import { MailboxSession, type StateStore } from "./state.js";
+import { BimiPolicy } from "./bimi.js";
 import type { Message } from "./text.js";
 
 export const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -70,6 +71,7 @@ export interface VerificationDependencies {
   state: StateStore;
   gmail(account: Account, signal: AbortSignal): GmailPort;
   publicUrl: string;
+  bimi?: Pick<BimiPolicy, "allows">;
   now?: () => number;
 }
 
@@ -77,7 +79,11 @@ export interface VerificationDependencies {
 // authoritative before history checks, so quarantined repeats never confer trust.
 export class Verification {
   private now: () => number;
-  constructor(private deps: VerificationDependencies) { this.now = deps.now || Date.now; }
+  private bimi: Pick<BimiPolicy, "allows">;
+  constructor(private deps: VerificationDependencies) {
+    this.now = deps.now || Date.now;
+    this.bimi = deps.bimi || new BimiPolicy();
+  }
 
   private async context(account: Account, key: string, session: MailboxSession) {
     let snapshot = await this.deps.senders.read(account.id, key);
@@ -108,6 +114,19 @@ export class Verification {
       return false;
     }
     if (contact) return false;
+    if (!test && await this.bimi.allows(message)) {
+      // Exemption belongs to this authenticated message, never the whole sender.
+      const held = record?.pending.find(item => item.id === message.id);
+      if (held) {
+        const current = await gmail.message(message.id!, "minimal");
+        await session.assertOwned();
+        await gmail.releaseHeld(message.id!, labels.held, held.restore &&
+          !current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT", "INBOX"].includes(l)));
+        record!.pending = record!.pending.filter(item => item.id !== message.id);
+        await context.save(record!);
+      }
+      return false;
+    }
     if (!test && !record && await gmail.hasCorresponded(sender, message)) return false;
     if (!record) {
       record = { email: sender, status: "pending", token: randomBytes(32).toString("base64url"),

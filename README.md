@@ -36,6 +36,12 @@ Further mail from a sender awaiting verification is classified first. Mail that 
 
 Automated replies, bulk mail and other messages that could cause reply loops may be held without a challenge. The owner can add a sender to Google Contacts; subsequent processing releases their held mail. See the [human verification guide](docs/VERIFICATION.md) for setup and the full handling rules.
 
+### BIMI and DMARC exemption
+
+A message skips human verification when Gmail reports a DMARC pass for its sender domain and that domain publishes a BIMI record with an HTTPS certificate URL (`a=`). Clefmail uses the message's `BIMI-Selector`, or `default` when absent. It can fall back to the authenticated parent domain reported by Gmail.
+
+This lightweight check reads DNS and caches results for five minutes. It does not download or validate the certificate, or establish whether Gmail displays a blue checkmark. The exemption applies to the individual message, so it creates no contact or permanent sender trust. AI labeling and archiving still run first. A missing record or failed lookup leaves the normal sender checks in place.
+
 ### Google Cloud services
 
 The processor accepts authenticated internal requests. The public service handles verification links. Both use the same private state bucket so message processing and verification can coordinate changes to the mailbox. Secret Manager supplies credentials and configuration.

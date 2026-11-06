@@ -7,7 +7,7 @@ and restores messages that originally arrived in the inbox.
 
 ## Behavior
 
-`humanVerification` defaults to `true` on each mailbox to hold mail from unknown senders after classification. Clefmail applies category labels and the AI archive policy first. Archived mail skips verification. Mail already outside the inbox also skips a new challenge. For messages that remain in the inbox:
+`humanVerification` defaults to `true` on each mailbox to hold mail from unknown senders after classification. Clefmail applies category labels and the AI archive policy first. Archived mail skips verification. Mail already outside the inbox also skips a new challenge. For messages that remain in the inbox, a DMARC pass reported by Gmail plus a published BIMI HTTPS certificate URL exempts the individual message from human verification. This DNS-only check follows `BIMI-Selector` and falls back to the authenticated parent domain when needed. It does not fetch the certificate or create permanent sender trust. Other messages follow these checks:
 
 1. Check Google Contacts. Contacts are never archived by either Clefmail archive path, even when verification is disabled.
 2. Check durable sender state **before** searching history. A pending sender's own held messages and Clefmail's outgoing challenge do not make them trusted.

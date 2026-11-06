@@ -121,7 +121,7 @@ export class Gmail implements GmailPort {
     });
     if (format === "metadata")
       for (const name of ["From", "To", "Cc", "Bcc", "Subject", "Date", "Delivered-To", "X-Original-To",
-        "Message-ID", "In-Reply-To", "References", "Auto-Submitted", "List-Id", "Precedence", "Return-Path",
+        "Message-ID", "In-Reply-To", "References", "Received", "BIMI-Selector", "Auto-Submitted", "List-Id", "Precedence", "Return-Path",
         "X-Auto-Response-Suppress", "Authentication-Results"])
         query.append("metadataHeaders", name);
     const result = messageSchema.parse(await this.call(`messages/${encodeURIComponent(id)}?${query}`));

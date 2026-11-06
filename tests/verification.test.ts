@@ -22,10 +22,10 @@ const protectedAccount = accountSchema.parse({ ...account, humanVerification: tr
 const settings = { publicUrl: "https://verify.example.com", siteKey: "synthetic-key" };
 const config = configSchema.parse({ provider: { kind: "jev" }, verification: settings, accounts: [protectedAccount] });
 
-function fixture(classify = async () => decision) {
+function fixture(classify = async () => decision, bimi = { allows: async (_message: unknown) => false }) {
   const state = new MemoryState(), senders = new MemorySenders(), gmail = new FakeGmail();
   let classified = 0;
-  const verification = new Verification({ state, senders, gmail: () => gmail, publicUrl: settings.publicUrl });
+  const verification = new Verification({ state, senders, gmail: () => gmail, publicUrl: settings.publicUrl, bimi });
   const processor = new Processor({ state, gmail: () => gmail, verification,
     classify: async () => { classified++; return classify(); }, log: () => {} });
   const record = async () => (await senders.read(account.id, digest(sender)))!.record;
@@ -369,4 +369,37 @@ test("production defaults enable archiving and verification with diagnostics off
   expect(defaults.humanVerificationTest).toBe(false);
   expect(() => configSchema.parse({ provider: { kind: "jev" }, accounts: [base] })).toThrow();
   expect(configSchema.parse({ provider: { kind: "jev" }, verification: settings, accounts: [base] }).accounts[0]!.humanVerification).toBe(true);
+});
+
+
+test("BIMI exemption keeps category without creating contact, challenge or sender trust", async () => {
+  const f = fixture(undefined, { allows: async () => true });
+  await f.processor.notification(protectedAccount, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_done");
+  expect(f.gmail.notices).toHaveLength(0);
+  expect(f.gmail.contacts.size).toBe(0);
+  expect(f.senders.values.size).toBe(0);
+});
+
+test("BIMI exemption is per message and can release its own interrupted hold", async () => {
+  let allow = false;
+  const f = fixture(undefined, { allows: async () => allow });
+  await f.processor.notification(protectedAccount, "200");
+  allow = true;
+  await next(f, "a2");
+  expect(f.gmail.messages.get("a2")!.labelIds).toContain("INBOX");
+  expect((await f.record()).pending.map(p => p.id)).toEqual(["a1"]);
+  allow = false;
+  await next(f, "a3", "300");
+  expect(f.gmail.messages.get("a3")!.labelIds).toContain("Label_held");
+  allow = true;
+  f.gmail.pages = [{ historyId: "400", history: [{ id: "400", messagesAdded: [{ message: { id: "a1" } }] }] }];
+  await f.processor.notification(protectedAccount, "400");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect((await f.record()).pending.map(p => p.id)).toEqual(["a3"]);
+  expect(f.gmail.contacts.size).toBe(0);
+  expect(f.gmail.notices).toHaveLength(1);
 });

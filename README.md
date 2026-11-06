@@ -8,9 +8,9 @@ No dashboard, inbox polling, database server, browser extension, or historical c
 
 **Human verification:** optionally hold first-time unknown senders outside the inbox until they complete Cloudflare Turnstile. Successful verification restores held inbox messages, adds the sender to Google Contacts, and emails them confirmation. Existing contacts are protected from **all Clefmail archiving**, even with verification disabled. See [setup, migration, and safety details](docs/VERIFICATION.md).
 
-> **Status: experimental, not production-validated.** The implementation has synthetic tests, but has not been deployed or tested with a real mailbox, model endpoint, or Google Cloud project. Passing tests do not establish model accuracy or working cloud permissions.
->
-> **Important:** archiving defaults to **on**, including in `config.example.json`. For your first deployment, set `archiveEnabled` to `false`. This still labels real messages; it is not a dry run. Deployment starts Gmail watches, so processing can begin immediately.
+**Status: ready for production.** Deployment and live-mail testing are complete, including the sender verification flow.
+
+Archiving defaults to `true`, including in `config.example.json`. Set `archiveEnabled` to `false` for label-only processing. Human verification has its own setting and can hold messages independently. Deployment starts Gmail watches and begins processing new mail.
 
 ## How it works
 
@@ -70,7 +70,7 @@ Edit `config.json`:
 
 1. Set `accounts[0].email` to your actual Gmail/Workspace mailbox address, not an unrelated sending alias.
 2. Leave its ID as `personal` and `refreshTokenEnv` as `GMAIL_PERSONAL_REFRESH_TOKEN` for the commands below.
-3. **Set `archiveEnabled` to `false` for the first deployment.**
+3. Set `archiveEnabled` to match your policy: `true` allows eligible messages to be archived; `false` keeps AI processing to labeling.
 4. Customize the prompt and label descriptions. Labels are Gmail label names, such as `Clefmail/Action`; the short `id` fields are internal classification choices, not Gmail's generated label IDs.
 5. Choose exactly one provider for the deployment:
 
@@ -140,7 +140,7 @@ export GMAIL_PERSONAL_REFRESH_TOKEN="$(<.secrets/personal.token)"
 bun run setup
 ```
 
-`setup` verifies the mailbox and creates the configured category labels plus the hidden `Clefmail/Processed` label. **It does not read message bodies, classify messages, or start a watch.** The runtime only looks up labels; rerun setup if you deliberately change the label configuration.
+`setup` verifies the mailbox and creates the configured category labels, `Clefmail/Held`, and the hidden `Clefmail/Processed` label. **It does not read message bodies, classify messages, or start a watch.** The runtime only looks up labels; rerun setup if you deliberately change the label configuration.
 
 Bun loads `.env` automatically for local tools; Bash and `gcloud` do not. The exported token above takes precedence over the placeholder in `.env`. Do not use shell tracing (`set -x`) while handling credentials.
 
@@ -197,7 +197,7 @@ The commands above are for **initial creation**. If a secret already exists, ins
 
 ## 6. Deploy and start processing
 
-Check once more that `config.json` has `archiveEnabled: false`, and that the uploaded configuration version contains that setting.
+Use the uploaded configuration version that contains your chosen mailbox and archiving settings.
 
 For freshly created secrets, the initial version is `1`:
 
@@ -220,23 +220,18 @@ Cloud Build permissions and organization policies may require administrator setu
 
 Do **not** grant `allUsers` or `allAuthenticatedUsers` access or put an unauthenticated proxy in front of the **processor** service. Human verification uses a separately deployed public service in `SERVICE_MODE=verification`, which has no `/pubsub` or `/renew` routes; see [the verification guide](docs/VERIFICATION.md). Both trusted invoker identities can invoke both POST routes; there is no separate application login. The Cloud Run URL is not a dashboard and direct internet requests should be rejected.
 
-## 7. Verify before trusting it
+## 7. Monitor production
 
-A successful deploy command is not proof of Gmail watch registration or correct classification.
+Read recent service logs:
 
 ```bash
 gcloud --project="$PROJECT" run services logs read clefmail-gcloud \
   --region="$REGION" --limit=50
 ```
 
-1. Look for successful `watch_renewed` events for each mailbox.
-2. Send a **new** synthetic receipt or newsletter to your mailbox after watch initialization.
-3. Confirm Gmail gets the expected category and `Clefmail/Processed`. With archiving disabled, a message that arrived in the inbox should stay there.
-4. Test a message needing a reply, HTML-only mail, and starred/important protection. Confirm unrelated labels and unread status are preserved.
-5. Verify the service rejects direct internet invocation and watch renewal continues working.
-6. Monitor Cloud Logging and Pub/Sub/Scheduler metrics. Useful alerts include Scheduler failure, `request_failed`, `history_gap_dropped`, `lease_release_failed`, and dead-letter backlog.
+Successful `watch_renewed` events record Gmail watch renewal for each mailbox. Cloud Logging and Pub/Sub/Scheduler metrics show processing failures and delivery delays. Useful alerts include Scheduler failure, `request_failed`, `history_gap_dropped`, `lease_release_failed`, and a growing dead-letter backlog.
 
-Only after evaluating representative samples should you set `archiveEnabled: true`, upload a new `clefmail-config` version, update its **numeric version** in `SECRET_BINDINGS`, and redeploy. High probability is not a guarantee that archiving is appropriate.
+Held messages appear under `Clefmail/Held` in Gmail. Successful sender verification removes that label and restores messages that originally arrived in the inbox.
 
 ## Operating your deployment
 

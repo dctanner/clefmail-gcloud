@@ -1,27 +1,9 @@
 # Human sender verification
 
-## Test with your own mailbox
-
-Set `humanVerificationTest: true` on an account to test the flow with the exact
-subject `Human verification test`. This requires the public verification service
-and Turnstile settings. You can leave `humanVerification: false` to keep ordinary
-mail on the usual labeling path.
-
-The match is case-sensitive and includes whitespace. Each matching incoming
-message gets a separate test record and verification link, including mail from
-your own address, existing contacts, and previous correspondents. Verification
-restores that test message and sends a confirmation. Test records leave Google
-Contacts and ordinary sender trust unchanged, so you can repeat the test by
-sending another message with the same subject.
+Sender verification is ready for production. Live-mail testing is complete.
 
 Held messages carry `Clefmail/Held`. Successful verification removes that label
-and restores messages that originally arrived in the inbox. Both test and normal
-verification send the same success email.
-
-Spam, Trash, drafts, malformed sender headers, and the automatic-reply safeguards
-still apply. Replies with `Re:` in the subject follow the ordinary mail policy.
-Set `humanVerificationTest: false` to stop starting tests; complete outstanding
-links before disabling it.
+and restores messages that originally arrived in the inbox.
 
 ## Behavior
 
@@ -73,7 +55,7 @@ Add the following top-level object to your private `config.json`:
 
 `publicUrl` must be an HTTPS origin with no credentials, path, query, or fragment. It can also be an explicitly mapped HTTPS domain. Register the exact hostname in Turnstile. Do not use Cloudflare's test keys in production.
 
-Initially keep every account's `humanVerification` set to `false`. Configure and verify the public service before activating quarantine.
+Initially keep every account's `humanVerification` set to `false`. Deploy the public service before activating quarantine.
 
 ## Two services, not a public processor
 
@@ -86,7 +68,7 @@ The same image has two mutually exclusive startup modes:
 
 Never grant public access to the processor or proxy it through the verification service. The public mode never constructs the processor/classifier and requires neither a classifier key nor Pub/Sub configuration. Both services need mailbox OAuth credentials and the **same** state bucket, because successful verification modifies Gmail and the mailbox lease serializes those changes.
 
-The new deployment script creates a separate service and runtime identity named `<SERVICE>-verify`; it does not change the processor's ingress/IAM or start watches. Public hosting and additional cloud costs are explicit operator actions.
+The deployment script creates a separate service and runtime identity named `<SERVICE>-verify`; it does not change the processor's ingress/IAM or start watches. Public hosting and additional cloud costs are explicit operator actions.
 
 ### Deployment sequence
 
@@ -107,23 +89,10 @@ The new deployment script creates a separate service and runtime identity named 
 4. Set `verification.publicUrl` to the printed service origin (or a separately configured custom domain) and configure that exact hostname in Turnstile. Upload a new config version; update the public service binding and redeploy it. Both services must ultimately use the same verification configuration and account IDs.
 5. Confirm `/verify` serves the page publicly, `/pubsub` and `/renew` return **404** on the public service, and direct internet access to the private processor is still denied. Opening `/verify` without an emailed fragment should ask for the complete email link; it cannot create contacts or release mail.
 6. Enable `humanVerification: true` for the desired mailbox, publish a new config version, and deploy that version to the **public service first**, then the private processor using the usual `SECRET_BINDINGS` and `scripts/deploy.sh`. The private binding does not need `TURNSTILE_SECRET_KEY`.
-7. Run the real-mail verification checklist below before trusting the feature.
 
-No deployment, Cloudflare widget, credentials, Google scopes, or remote-device behavior is established by passing local tests.
+## Production monitoring
 
-## Verification checklist
-
-Use synthetic messages from addresses you control:
-
-- A contact: no challenge, no archive even when the model recommends archiving.
-- An existing incoming correspondent and an address previously emailed by the owner: no challenge; normal AI policy remains in effect for non-contacts.
-- A truly new sender: archived, receives one challenge, no classification.
-- A second message from that unverified sender: archived, no second challenge.
-- Open the challenge on another device. Complete Turnstile and submit. Both held inbox messages return, one Google Contact is created, and the sender receives confirmation.
-- Verify again: no duplicate restore/confirmation during ordinary retry. New mail from that sender stays in the inbox even when the AI recommends archiving.
-- Move a held message to Trash before verifying: it must stay there.
-- Verify that invalid/expired links, wrong Turnstile hostname/action, missing proof, and direct calls to privileged routes cannot mutate Gmail.
-- Confirm mailbox watches still renew and monitor `verification_failed`, `request_failed`, dead-letter backlog, and cloud/provider quotas. Logs intentionally omit email addresses and verification capabilities.
+Monitor `verification_failed`, `request_failed`, dead-letter backlog, and cloud/provider quotas. Successful `watch_renewed` events record continued mailbox watch renewal. Logs omit email addresses and verification capabilities.
 
 ## State, retries, privacy, and limits
 
@@ -143,3 +112,26 @@ Use synthetic messages from addresses you control:
 To stop all new Clefmail archiving, set both `archiveEnabled: false` and `humanVerification: false` on the processor's account configuration. Existing pending mail stays archived; disabling is not an automatic bulk restore.
 
 Prefer to drain existing challenges first. During a drain, keep the public service on its previous config with the account enabled and `humanVerification: true`, while disabling new quarantine in the processor config. Existing links can still complete against the shared bucket. Once drained, disable the public config/account too. Alternatively, restore mail manually in Gmail and add trusted senders to Google Contacts. Do not delete sender state as a routine fix: pending repeats could then be mistaken for prior trusted correspondence.
+
+## Optional diagnostic mode
+
+The optional `humanVerificationTest: true` account setting exercises the flow with the exact
+subject `Human verification test`. This requires the public verification service
+and Turnstile settings. You can leave `humanVerification: false` to keep ordinary
+mail on the usual labeling path.
+
+The match is case-sensitive and includes whitespace. Each matching incoming
+message gets a separate test record and verification link, including mail from
+your own address, existing contacts, and previous correspondents. Verification
+restores that test message and sends a confirmation. Test records leave Google
+Contacts and ordinary sender trust unchanged, so you can repeat the test by
+sending another message with the same subject.
+
+Held messages carry `Clefmail/Held`. Successful verification removes that label
+and restores messages that originally arrived in the inbox. Both test and normal
+verification send the same success email.
+
+Spam, Trash, drafts, malformed sender headers, and the automatic-reply safeguards
+still apply. Replies with `Re:` in the subject follow the ordinary mail policy.
+Set `humanVerificationTest: false` to stop starting tests; complete outstanding
+links before disabling it.

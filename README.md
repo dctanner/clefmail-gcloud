@@ -1,34 +1,88 @@
 # Clefmail for Google Cloud
 
-**Automatically label new Gmail messages with Clef or Jev—without switching email clients.**
+Clefmail organizes new Gmail messages as they arrive. It uses Clef or Jev to choose a label from your rules, with optional archiving for mail that needs no inbox attention. You keep using Gmail, where the labels and messages appear.
 
-Clefmail is a small, self-hosted TypeScript service. Gmail sends new-mail notifications to Google Cloud Run through Pub/Sub; Clefmail asks your chosen model for a category and an archive decision, then updates that individual message in Gmail. It supports up to ten mailboxes, each with its own labels and instructions.
+For more control over who reaches your inbox, enable human verification. Clefmail holds mail from unknown senders and emails them a link to confirm they are human. Once they complete the check, their held mail returns to your inbox and they become a Google Contact.
 
-No dashboard, inbox polling, database server, browser extension, or historical classification scan. Google Cloud Storage holds mailbox checkpoints/leases and optional sender-verification records.
+Clefmail is self-hosted on Google Cloud and supports up to ten mailboxes with separate rules. **Ready for production:** deployment and live-mail testing are complete, including sender verification.
 
-**Human verification:** optionally hold first-time unknown senders outside the inbox until they complete Cloudflare Turnstile. Successful verification restores held inbox messages, adds the sender to Google Contacts, and emails them confirmation. Existing contacts are protected from **all Clefmail archiving**, even with verification disabled. See [setup, migration, and safety details](docs/VERIFICATION.md).
+## How mail moves through Clefmail
 
-**Status: ready for production.** Deployment and live-mail testing are complete, including the sender verification flow.
-
-Archiving defaults to `true`, including in `config.example.json`. Set `archiveEnabled` to `false` for label-only processing. Human verification has its own setting and can hold messages independently. Deployment starts Gmail watches and begins processing new mail.
-
-## How it works
-
-```text
-Gmail watch → Pub/Sub authenticated push → Cloud Run /pubsub
-                                            ├─ read Gmail messageAdded history
-                                            ├─ fetch new messages by ID
-                                            ├─ Clef or Jev: category + archive decision
-                                            └─ Gmail messages.modify
-
-Cloud Scheduler (daily) → Cloud Run /renew → renew Gmail watches
-Secret Manager         → OAuth credentials, model key, configuration
-Cloud Storage          → per-mailbox history cursor and processing lease
+```mermaid
+flowchart TD
+    A[New email arrives in Gmail] --> B[Gmail sends a notification through Pub/Sub]
+    B --> C[Private Cloud Run service reads the new message]
+    C --> D{Sender needs human verification?}
+    D -->|Yes| H[Hold outside the inbox with Clefmail/Held]
+    H --> V[Sender verification flow below]
+    D -->|No| E[Clef or Jev evaluates the message against your rules]
+    E --> F[Apply a category when confident and mark Clefmail/Processed]
+    F --> G{Archiving enabled and all checks pass?}
+    G -->|Yes| I[Archive the message]
+    G -->|No| J[Keep its current inbox status]
 ```
 
-The first watch starts at Gmail's current history baseline: **existing mail is left alone**. Only newly added eligible incoming messages are classified. Read mail and mail already archived by a Gmail filter remain eligible; Spam, Trash, drafts and sent-only messages are skipped. Self-addressed mail is supported when recipient metadata identifies it as incoming.
+Processing starts with mail received after the first Gmail watch is registered. Clefmail skips Spam, Trash, drafts and sent-only messages. Read mail and messages archived by a Gmail filter remain eligible for labeling. Each update applies to an individual message and preserves its unread status and unrelated labels.
 
-Gmail push payloads contain a mailbox address and history ID, not a message ID. The service reads the intervening history changes. With human verification enabled it also searches retained incoming/sent **metadata** for prior correspondence and Sent mail for notice deduplication; it never classifies historical mail. Its own label changes do not trigger classification.
+AI archiving defaults to `true`. Set `archiveEnabled: false` for labeling only. Contacts are protected from Clefmail archiving; starred and important messages are also protected from AI archiving. Human verification uses its own `humanVerification` setting, which defaults to `false`.
+
+### Labels in Gmail
+
+The example configuration includes three category labels. You can rename these or define your own in `config.json`.
+
+| Label | What it means |
+| --- | --- |
+| `Clefmail/Action` | A request or personal message that needs your attention |
+| `Clefmail/Receipts` | A purchase confirmation, invoice or transaction record |
+| `Clefmail/Newsletters` | A subscription or informational newsletter |
+| `Clefmail/Held` | The message is waiting for its sender to complete human verification; removed when the message is released |
+| `Clefmail/Processed` | Hidden marker used to track handled messages and prevent repeated classification; remains after release from a hold |
+
+A classified message receives at most one configured category label. When the model is uncertain, Clefmail applies only `Clefmail/Processed` and keeps the message's inbox status. Held messages receive both `Clefmail/Held` and `Clefmail/Processed`; they bypass AI classification, including when released.
+
+### Human verification
+
+When enabled, Clefmail checks Google Contacts, saved verification status and retained Gmail correspondence to decide whether a sender needs verification. Existing contacts and previously verified senders can reach the inbox. Earlier correspondence also bypasses the human check, though AI archiving can still apply to a sender outside your contacts.
+
+```mermaid
+flowchart TD
+    A[Email from an unknown sender] --> B[Add Clefmail/Held and Clefmail/Processed]
+    B --> C[Remove from inbox and save the message for release]
+    C --> D{Safe to send an automatic reply?}
+    D -->|Yes| E[Email sender: Please verify you are human]
+    D -->|No| F[Keep held without sending a challenge]
+    E --> G[Sender opens the link and completes Cloudflare Turnstile]
+    G --> H[Public verification service validates the result]
+    H --> I[Add sender to Google Contacts]
+    I --> J[Remove Clefmail/Held and restore eligible held inbox messages]
+    J --> K[Email sender: Email verification successful]
+    K --> L[Future mail bypasses verification and Clefmail archiving]
+```
+
+Further mail from a sender awaiting verification joins the hold. Clefmail reuses the pending challenge while its link remains valid. Messages moved to Trash or Spam stay there when verification completes, and mail originally archived by a Gmail filter stays archived.
+
+Automated replies, bulk mail and other messages that could cause reply loops may be held without a challenge. The owner can add a sender to Google Contacts; subsequent processing releases their held mail. See the [human verification guide](docs/VERIFICATION.md) for setup and the full handling rules.
+
+### Google Cloud services
+
+```mermaid
+flowchart LR
+    Gmail[Gmail] -->|New-mail notifications| PubSub[Pub/Sub]
+    PubSub -->|Authenticated push| Processor[Private Cloud Run processor]
+    Scheduler[Cloud Scheduler] -->|Daily watch renewal| Processor
+    Processor -->|Label and archive| Gmail
+    Processor -->|Classify email text| Model[Clef or Jev]
+    Sender[Sender's browser] -->|Human check| Verify[Public Cloud Run verification service]
+    Verify --> Turnstile[Cloudflare Turnstile]
+    Verify -->|Release held mail and send confirmation| Gmail
+    Verify -->|Save verified sender| Contacts[Google Contacts]
+    Processor --- State[Cloud Storage: checkpoints and sender records]
+    Verify --- State
+    Secrets[Secret Manager] -.-> Processor
+    Secrets -.-> Verify
+```
+
+The processor accepts authenticated internal requests. The public service handles verification links. Both use the same private state bucket so message processing and verification can coordinate changes to the mailbox. Secret Manager supplies credentials and configuration.
 
 ## Before you start
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PROCESSED_LABEL, type Account } from "./config.js";
+import { PROCESSED_LABEL, HELD_LABEL, type Account } from "./config.js";
 import { HttpError, SafeError } from "./errors.js";
 import { jsonRequest, type Fetch } from "./http.js";
 import type { Message } from "./text.js";
@@ -20,6 +20,7 @@ const historyPageSchema = z.object({
 export type HistoryPage = z.infer<typeof historyPageSchema>;
 export interface LabelMap {
   processed: string;
+  held: string;
   options: Record<string, string>;
 }
 export type MessageFormat = "full" | "minimal" | "metadata";
@@ -34,7 +35,7 @@ export interface GmailPort {
   hasContact(email: string): Promise<boolean>;
   addContact(email: string): Promise<void>;
   hasCorresponded(email: string, current: Message): Promise<boolean>;
-  restore(id: string): Promise<void>;
+  releaseHeld(id: string, heldLabel: string, restoreInbox: boolean): Promise<void>;
   sendNotice(to: string, subject: string, body: string, key: string, replyTo?: string): Promise<void>;
 }
 
@@ -146,11 +147,16 @@ export class Gmail implements GmailPort {
         return existing.id;
       }
       if (!create) throw new SafeError("gmail_label_missing_run_setup");
-      const created = labelSchema.parse(await this.call("labels", {
+      const response = labelSchema.omit({ type: true }).extend({ type: z.string().optional() }).parse(await this.call("labels", {
         name,
         labelListVisibility: hidden ? "labelHide" : "labelShow",
         messageListVisibility: hidden ? "hide" : "show",
       }));
+      // Gmail can omit type from its creation response. Read it back before use.
+      const created = labelSchema.parse(response.type === undefined
+        ? await this.call(`labels/${encodeURIComponent(response.id)}`)
+        : response);
+      if (created.id !== response.id || created.name !== name) throw new SafeError("gmail_label_mismatch");
       if (created.type !== "user") throw new SafeError("system_label_not_allowed");
       result.labels.push(created);
       return created.id;
@@ -158,7 +164,8 @@ export class Gmail implements GmailPort {
     const processed = await find(PROCESSED_LABEL, true);
     const options: Record<string, string> = {};
     for (const label of account.labels) options[label.id] = await find(label.name);
-    return { processed, options };
+    const held = await find(HELD_LABEL);
+    return { processed, held, options };
   }
 
   async modify(id: string, add: string[], remove: string[]): Promise<void> {
@@ -253,9 +260,12 @@ export class Gmail implements GmailPort {
     throw new SafeError("correspondence_page_limit");
   }
 
-  async restore(id: string): Promise<void> {
+  async releaseHeld(id: string, heldLabel: string, restoreInbox: boolean): Promise<void> {
     messageId.parse(id);
-    await this.call(`messages/${encodeURIComponent(id)}/modify`, { addLabelIds: ["INBOX"] });
+    if (!/^Label_[a-zA-Z0-9_-]+$/.test(heldLabel)) throw new SafeError("unsafe_label_mutation");
+    await this.call(`messages/${encodeURIComponent(id)}/modify`, {
+      addLabelIds: restoreInbox ? ["INBOX"] : [], removeLabelIds: [heldLabel],
+    });
   }
 
   async sendNotice(to: string, subject: string, body: string, key: string, replyTo?: string): Promise<void> {

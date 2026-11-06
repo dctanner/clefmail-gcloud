@@ -74,10 +74,10 @@ body{font:17px/1.6 system-ui,sans-serif;background:#f5f7fb;color:#18233a;margin:
 main{max-width:540px;margin:5vh auto;padding:32px;background:white;border:1px solid #dae0eb;border-radius:16px}
 h1{line-height:1.2}button{font:inherit;background:#204ad5;color:white;border:0;border-radius:8px;padding:10px 20px;cursor:pointer}button:disabled{opacity:.5;cursor:default}
 </style></head><body><main><h1>Let your email through</h1>
-<p>Confirm you are human to release your held messages and allow future emails to this recipient.</p>
+<p>Confirm you are human to release your held email.</p>
 <div id="challenge"></div><button id="submit" disabled>Verify and deliver</button>
 <p id="status" role="status" aria-live="polite">Loading verification…</p>
-<p><small>This check uses Cloudflare Turnstile. No Google sign-in is required.</small></p></main>
+</main>
 <script nonce="${nonce}">
 const parts = location.hash.slice(1).split('/');
 history.replaceState(null, '', '/verify');

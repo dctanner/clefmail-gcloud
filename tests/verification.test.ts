@@ -43,6 +43,7 @@ test("new sender archived before challenge; repeats stay archived without more n
   const send = f.gmail.sendNotice.bind(f.gmail);
   f.gmail.sendNotice = async (...args) => {
     expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
+    expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_held");
     await send(...args);
   };
   await f.processor.notification(protectedAccount, "200");
@@ -65,6 +66,8 @@ test("verification restores held messages, adds contact, sends success once and 
   expect(f.gmail.contacts.has(sender)).toBe(true);
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
   expect(f.gmail.messages.get("a2")!.labelIds).toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect(f.gmail.messages.get("a2")!.labelIds).not.toContain("Label_held");
   expect(f.gmail.notices).toHaveLength(2);
   expect(f.gmail.notices[1]!.to).toBe(sender);
   await f.verification.complete(protectedAccount, digest(sender), record.token);
@@ -117,12 +120,12 @@ test("failed challenge send retries despite processed marker and preserves pendi
 test("partial restoration failure resumes without repeating successful restores or success mail", async () => {
   const f = fixture(); await f.processor.notification(protectedAccount, "200"); await next(f, "a2");
   const token = (await f.record()).token;
-  const restore = f.gmail.restore.bind(f.gmail);
-  f.gmail.restore = async id => { if (id === "a2") throw new SafeError("restore_failed"); await restore(id); };
+  const restore = f.gmail.releaseHeld.bind(f.gmail);
+  f.gmail.releaseHeld = async (id, held, inbox) => { if (id === "a2") throw new SafeError("restore_failed"); await restore(id, held, inbox); };
   await expect(f.verification.complete(protectedAccount, digest(sender), token)).rejects.toThrow("restore_failed");
   expect((await f.record()).status).toBe("verifying");
   expect((await f.record()).pending.map(p => p.id)).toEqual(["a2"]);
-  f.gmail.restore = restore;
+  f.gmail.releaseHeld = restore;
   await f.verification.complete(protectedAccount, digest(sender), token);
   expect(f.gmail.modifications.filter(m => m.id === "a1" && m.add.includes("INBOX"))).toHaveLength(1);
   expect(f.gmail.notices).toHaveLength(2);
@@ -132,10 +135,12 @@ test("verification never resurrects trash/spam or mail already archived before q
   const f = fixture();
   f.gmail.messages.set("a1", message("a1", []));
   await f.processor.notification(protectedAccount, "200");
-  await next(f, "a2"); f.gmail.messages.get("a2")!.labelIds = ["TRASH", "Label_done"];
+  await next(f, "a2"); f.gmail.messages.get("a2")!.labelIds = ["TRASH", "Label_done", "Label_held"];
   await f.verification.complete(protectedAccount, digest(sender), (await f.record()).token);
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
   expect(f.gmail.messages.get("a2")!.labelIds).not.toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect(f.gmail.messages.get("a2")!.labelIds).not.toContain("Label_held");
 });
 
 test("manually adding pending sender to contacts releases held mail and bypasses verification", async () => {
@@ -196,6 +201,61 @@ test("verification config requires an HTTPS origin and site key", () => {
   for (const publicUrl of ["http://verify.example.com", "https://user:password@verify.example.com", "https://verify.example.com/path"]) {
     expect(() => configSchema.parse({ ...config, verification: { ...settings, publicUrl } })).toThrow();
   }
+});
+
+test("exact test subject challenges self and trusted senders with ordinary verification off", async () => {
+  for (const from of [account.email, sender]) {
+    const f = fixture();
+    const testAccount = accountSchema.parse({ ...account, humanVerification: false, humanVerificationTest: true, archiveEnabled: false });
+    f.gmail.contacts.add(from);
+    f.gmail.corresponded = true;
+    f.gmail.addContact = async () => { throw new Error("A test must not change contacts"); };
+    const deliver = async (id: string, cursor: string, subject: string) => {
+      const m = message(id, ["INBOX", "UNREAD"]);
+      m.payload!.headers = [{ name: "From", value: from }, { name: "To", value: account.email }, { name: "Subject", value: subject }];
+      f.gmail.messages.set(id, m);
+      f.gmail.pages = [{ historyId: cursor, history: [{ id: cursor, messagesAdded: [{ message: { id } }] }] }];
+      await f.processor.notification(testAccount, cursor);
+    };
+    await deliver("test1", "200", "Human verification test");
+    expect(f.gmail.messages.get("test1")!.labelIds).not.toContain("INBOX");
+    expect(f.gmail.messages.get("test1")!.labelIds).toContain("Label_held");
+    expect(f.gmail.notices).toHaveLength(1);
+    expect(f.classified()).toBe(0);
+    const key = digest(`test:${from}:test1`);
+    const record = (await f.senders.read(account.id, key))!.record;
+    expect(record.test).toBe(true);
+    await f.verification.complete(testAccount, key, record.token);
+    expect(f.gmail.messages.get("test1")!.labelIds).toContain("INBOX");
+    expect(f.gmail.messages.get("test1")!.labelIds).toContain("UNREAD");
+    expect(f.gmail.messages.get("test1")!.labelIds).not.toContain("Label_held");
+    expect(f.gmail.notices).toHaveLength(2);
+    expect(f.gmail.notices[1]!.body).toBe(`You are verified for ${account.email}. Your held inbox messages have been released.`);
+    expect(await f.senders.read(account.id, digest(from))).toBeNull();
+    await f.verification.complete(testAccount, key, record.token);
+    expect(f.gmail.notices).toHaveLength(2);
+    await deliver("test2", "250", "Human verification test");
+    expect(f.gmail.messages.get("test2")!.labelIds).not.toContain("INBOX");
+    expect(f.gmail.notices).toHaveLength(3);
+    await deliver("normal", "300", "Re: Human verification test");
+    expect(f.gmail.messages.get("normal")!.labelIds).toContain("INBOX");
+    expect(f.gmail.notices).toHaveLength(3);
+  }
+});
+
+test("test subject requires exact case and spacing, with a single Subject header", async () => {
+  const { isVerificationTest } = await import("../src/verification.js");
+  const a = accountSchema.parse({ ...account, humanVerificationTest: true });
+  for (const subject of ["human verification test", "Human verification test ", " Human verification test", "Re: Human verification test"]) {
+    const m = message(); m.payload!.headers!.push({ name: "Subject", value: subject });
+    expect(isVerificationTest(a, m)).toBe(false);
+  }
+  const m = message(); m.payload!.headers!.push({ name: "Subject", value: "Human verification test" });
+  expect(isVerificationTest(a, m)).toBe(true);
+  expect(isVerificationTest(account, m)).toBe(false);
+  m.payload!.headers!.push({ name: "Subject", value: "Human verification test" });
+  expect(isVerificationTest(a, m)).toBe(false);
+  expect(() => configSchema.parse({ provider: { kind: "jev" }, accounts: [a] })).toThrow();
 });
 
 function handlerFixture(overrides: object = {}) {

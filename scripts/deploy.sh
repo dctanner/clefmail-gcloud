@@ -85,7 +85,7 @@ g pubsub subscriptions describe "$SERVICE" >/dev/null 2>&1 && action=update
 topic_args=()
 [[ "$action" != create ]] || topic_args+=("--topic=${TOPIC}")
 g pubsub subscriptions "$action" "$SERVICE" \
-  "${topic_args[@]}" \
+  ${topic_args[@]+"${topic_args[@]}"} \
   --push-endpoint="${URL}/pubsub" --push-auth-service-account="$INVOKER" --push-auth-token-audience="$URL" \
   --ack-deadline=300 --min-retry-delay=10s --max-retry-delay=600s \
   --message-retention-duration=1d --expiration-period=never \

@@ -10,6 +10,14 @@ import { MailboxSession, type StateStore } from "./state.js";
 import type { Message } from "./text.js";
 
 export const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+export const VERIFICATION_TEST_SUBJECT = "Human verification test";
+export function isVerificationTest(account: Account, message: Message): boolean {
+  const subjects = message.payload?.headers?.filter(h => h.name.toLowerCase() === "subject") || [];
+  return account.humanVerificationTest && subjects.length === 1 && subjects[0]!.value === VERIFICATION_TEST_SUBJECT;
+}
+function senderKey(account: Account, message: Message, sender: string): string {
+  return digest(isVerificationTest(account, message) ? `test:${sender}:${message.id}` : sender);
+}
 const pendingSchema = z.object({ id: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/), restore: z.boolean() });
 const senderSchema = z.object({
   email: z.string().email(),
@@ -19,6 +27,7 @@ const senderSchema = z.object({
   challenged: z.boolean(),
   successSent: z.boolean(),
   pending: z.array(pendingSchema).max(5000),
+  test: z.boolean().default(false),
 }).strict();
 export type SenderRecord = z.infer<typeof senderSchema>;
 export interface SenderSnapshot { record: SenderRecord; generation: string }
@@ -86,22 +95,23 @@ export class Verification {
   async quarantine(account: Account, message: Message, gmail: GmailPort, labels: LabelMap,
     session: MailboxSession): Promise<boolean> {
     const sender = senderOf(message);
-    if (!sender || sender === account.email) return false;
-    const key = digest(sender);
+    const test = isVerificationTest(account, message);
+    if (!sender || (!test && sender === account.email)) return false;
+    const key = senderKey(account, message, sender);
     const context = await this.context(account, key, session);
     let record = context.record;
     // Contact additions outside Clefmail also override quarantine immediately.
-    const contact = await gmail.hasContact(sender);
+    const contact = !test && await gmail.hasContact(sender);
     if (record && (contact || record.status !== "pending")) {
       if (record.status !== "verified" || record.pending.length || !record.successSent)
         await this.finish(account, key, record, gmail, session, context.save);
       return false;
     }
     if (contact) return false;
-    if (!record && await gmail.hasCorresponded(sender, message)) return false;
+    if (!test && !record && await gmail.hasCorresponded(sender, message)) return false;
     if (!record) {
       record = { email: sender, status: "pending", token: randomBytes(32).toString("base64url"),
-        expiresAt: this.now() + 30 * 86400_000, challenged: false, successSent: false, pending: [] };
+        expiresAt: this.now() + 30 * 86400_000, challenged: false, successSent: false, pending: [], test };
     }
     const current = await gmail.message(message.id!, "minimal");
     if (current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT"].includes(l))) return true;
@@ -117,18 +127,19 @@ export class Verification {
     // Journal before Gmail effects. needsResume bypasses the processed marker
     // on retry until challenge delivery and verification effects finish.
     await context.save(record);
-    if (await gmail.hasContact(sender)) {
+    if (!test && await gmail.hasContact(sender)) {
       await this.finish(account, key, record, gmail, session, context.save);
       return false;
     }
     await session.assertOwned();
-    await gmail.modify(message.id!, [labels.processed], ["INBOX"]);
+    await gmail.modify(message.id!, [labels.processed, labels.held], ["INBOX"]);
     if (!record.challenged && mayChallenge(message, sender)) {
       const link = `${this.deps.publicUrl.replace(/\/$/, "")}/verify#${account.id}/${key}/${record.token}`;
       await session.assertOwned();
       await gmail.sendNotice(sender, "Please verify you are human", [
         `Your email to ${account.email} has been held outside the inbox.`,
-        "Please confirm you are human to deliver your email and allow future messages:", link,
+        test ? "Please confirm you are human to release this test email:" :
+          "Please confirm you are human to deliver your email and allow future messages:", link,
         "This link expires after 30 days. If you did not send this email, ignore this message.",
       ].join("\n\n"), digest(`challenge:${account.id}:${key}:${record.token}`), header(message, "Message-ID"));
       record.challenged = true;
@@ -142,7 +153,7 @@ export class Verification {
   async needsResume(account: Account, message: Message): Promise<boolean> {
     const sender = senderOf(message);
     if (!sender) return false;
-    const record = (await this.deps.senders.read(account.id, digest(sender)))?.record;
+    const record = (await this.deps.senders.read(account.id, senderKey(account, message, sender)))?.record;
     return !!record && (record.pending.some(item => item.id === message.id) ||
       record.status === "verifying" || (record.status === "verified" && !record.successSent));
   }
@@ -157,7 +168,7 @@ export class Verification {
     try {
       const context = await this.context(account, key, session);
       const record = context.record;
-      if (!record || token.length !== record.token.length ||
+      if (!record || !(record.test ? account.humanVerificationTest : account.humanVerification) || token.length !== record.token.length ||
           !timingSafeEqual(Buffer.from(token), Buffer.from(record.token)) ||
           (record.status === "pending" && record.expiresAt <= this.now()))
         throw new SafeError("invalid_verification_link");
@@ -171,17 +182,19 @@ export class Verification {
     session: MailboxSession, save: (record: SenderRecord) => Promise<void>): Promise<void> {
     if (record.status === "pending") { record.status = "verifying"; await save(record); }
     await session.assertOwned();
-    await gmail.addContact(record.email); // Idempotent lookup before create.
+    if (!record.test) await gmail.addContact(record.email); // Test records never change sender trust.
     // Bounded state; each successful restore is checkpointed independently. A
     // deleted/spam/trashed message is never resurrected. Archived-by-filter mail
     // that was never in INBOX is deliberately not restored.
+    const labels = record.pending.length ? await gmail.labels(account) : undefined;
     while (record.pending.length) {
       const item = record.pending[0]!;
       try {
         const message = await gmail.message(item.id, "minimal");
-        if (item.restore && !message.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT", "INBOX"].includes(l))) {
+        const restoreInbox = item.restore && !message.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT", "INBOX"].includes(l));
+        if (restoreInbox || message.labelIds?.includes(labels!.held)) {
           await session.assertOwned();
-          await gmail.restore(item.id);
+          await gmail.releaseHeld(item.id, labels!.held, restoreInbox);
         }
       } catch (error) {
         if (!(error instanceof HttpError) || error.service !== "gmail" || error.status !== 404) throw error;
@@ -193,7 +206,6 @@ export class Verification {
       await session.assertOwned();
       await gmail.sendNotice(record.email, "Email verification successful", [
         `You are verified for ${account.email}. Your held inbox messages have been released.`,
-        "You have been added to Google Contacts. Clefmail will not archive your future messages.",
       ].join("\n\n"), digest(`success:${account.id}:${key}`));
       record.successSent = true;
     }
@@ -203,5 +215,5 @@ export class Verification {
 }
 
 export function verificationAccount(config: Config, id: string): Account | undefined {
-  return config.accounts.find(a => a.id === id && a.enabled && a.humanVerification);
+  return config.accounts.find(a => a.id === id && a.enabled && (a.humanVerification || a.humanVerificationTest));
 }

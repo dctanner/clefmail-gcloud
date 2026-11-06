@@ -3,10 +3,11 @@ import { z } from "zod";
 import { SafeError } from "./errors.js";
 
 export const PROCESSED_LABEL = "Clefmail/Processed";
+export const HELD_LABEL = "Clefmail/Held";
 const optionSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{0,49}$/)
     .refine(v => !["no_match", "constructor", "prototype", "__proto__"].includes(v)),
-  name: z.string().trim().min(1).max(100).refine(v => v !== PROCESSED_LABEL),
+  name: z.string().trim().min(1).max(100).refine(v => ![PROCESSED_LABEL, HELD_LABEL].includes(v)),
   description: z.string().trim().min(1).max(500),
 }).strict();
 
@@ -18,6 +19,7 @@ export const accountSchema = z.object({
   enabled: z.boolean().default(true),
   archiveEnabled: z.boolean().default(true),
   humanVerification: z.boolean().default(false),
+  humanVerificationTest: z.boolean().default(false),
   probability: z.number().min(0.5).max(1).default(0.75),
   margin: z.number().min(0).max(1).default(0.15),
   archiveThreshold: z.number().min(0.5).max(1).default(0.95),
@@ -50,7 +52,7 @@ export const configSchema = z.object({
   ]),
   accounts: z.array(accountSchema).min(1).max(10),
 }).strict().superRefine((v, ctx) => {
-  if (v.accounts.some(a => a.humanVerification) && !v.verification)
+  if (v.accounts.some(a => a.humanVerification || a.humanVerificationTest) && !v.verification)
     ctx.addIssue({ code: "custom", message: "Human verification requires verification settings" });
   for (const key of ["id", "email", "refreshTokenEnv"] as const) {
     if (new Set(v.accounts.map(a => a[key])).size !== v.accounts.length)

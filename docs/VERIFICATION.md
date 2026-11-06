@@ -1,5 +1,28 @@
 # Human sender verification
 
+## Test with your own mailbox
+
+Set `humanVerificationTest: true` on an account to test the flow with the exact
+subject `Human verification test`. This requires the public verification service
+and Turnstile settings. You can leave `humanVerification: false` to keep ordinary
+mail on the usual labeling path.
+
+The match is case-sensitive and includes whitespace. Each matching incoming
+message gets a separate test record and verification link, including mail from
+your own address, existing contacts, and previous correspondents. Verification
+restores that test message and sends a confirmation. Test records leave Google
+Contacts and ordinary sender trust unchanged, so you can repeat the test by
+sending another message with the same subject.
+
+Held messages carry `Clefmail/Held`. Successful verification removes that label
+and restores messages that originally arrived in the inbox. Both test and normal
+verification send the same success email.
+
+Spam, Trash, drafts, malformed sender headers, and the automatic-reply safeguards
+still apply. Replies with `Re:` in the subject follow the ordinary mail policy.
+Set `humanVerificationTest: false` to stop starting tests; complete outstanding
+links before disabling it.
+
 ## Behavior
 
 Enable `humanVerification: true` on a mailbox to hold new unknown senders:

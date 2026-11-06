@@ -5,7 +5,7 @@ import { type GmailPort, type LabelMap, verifyMailbox } from "./gmail.js";
 import { MailboxSession, type StateStore } from "./state.js";
 import { extract, received, type EmailText } from "./text.js";
 import { senderOf } from "./sender.js";
-import type { Verification } from "./verification.js";
+import { isVerificationTest, type Verification } from "./verification.js";
 
 // Deterministic per-message outcomes: retrying cannot succeed, so abstain instead of
 // blocking every later message in the mailbox.
@@ -42,10 +42,11 @@ export class Processor {
       headerOnly = true;
     }
     if (!received(message, account.email)) return;
-    const resume = account.humanVerification &&
+    const verify = account.humanVerification || isVerificationTest(account, message);
+    const resume = verify &&
       await this.deps.verification?.needsResume(account, message);
     if (message.labelIds?.includes(labels.processed) && !resume) return;
-    if (account.humanVerification) {
+    if (verify) {
       if (!this.deps.verification) throw new SafeError("verification_not_configured");
       if (await this.deps.verification.quarantine(account, message, gmail, labels, session)) return;
       if (message.labelIds?.includes(labels.processed)) return;

@@ -104,6 +104,31 @@ test("runtime label lookup never creates missing labels; explicit setup does", a
     }));
   await expect(client.labels(account)).rejects.toThrow("gmail_label_missing_run_setup");
   expect(created).toBe(0);
-  expect(await client.labels(account, true)).toEqual({ processed: "Label_1", options: { receipts: "Label_2" } });
-  expect(created).toBe(2);
+  expect(await client.labels(account, true)).toEqual({ processed: "Label_1", held: "Label_3", options: { receipts: "Label_2" } });
+  expect(created).toBe(3);
+});
+
+test("label creation reads back missing type and rejects a system label", async () => {
+  for (const type of ["user", "system"]) {
+    const labels = new Map<string, { id: string; name: string; type: string }>();
+    const client = new Gmail({ clientId: "id", clientSecret: "secret", refreshToken: "refresh" }, undefined,
+      stub((url, init) => {
+        if (url.includes("oauth2")) return json({ access_token: "access", expires_in: 3600 });
+        if (url.endsWith("/labels") && init.method === "GET") return json({ labels: [] });
+        if (url.endsWith("/labels") && init.method === "POST") {
+          const { name } = JSON.parse(String(init.body));
+          const id = `Label_${labels.size + 1}`;
+          labels.set(id, { id, name, type });
+          return json({ id, name });
+        }
+        const label = labels.get(url.split("/").at(-1)!);
+        if (label) return json(label);
+        throw new Error("Unexpected request");
+      }));
+    if (type === "user") {
+      expect(await client.labels(account, true)).toEqual({ processed: "Label_1", held: "Label_3", options: { receipts: "Label_2" } });
+    } else {
+      await expect(client.labels(account, true)).rejects.toThrow("system_label_not_allowed");
+    }
+  }
 });

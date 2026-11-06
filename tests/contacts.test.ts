@@ -82,13 +82,17 @@ test("notice has loop protection, fixed Message-ID and safe reply headers; send 
   await expect(gmail.sendNotice("shop@example.com", "Verify\r\nBcc: victim@example.com", "Link", key)).rejects.toThrow("invalid_notice");
 });
 
-test("restore is a separate narrowly scoped INBOX-only operation", async () => {
+test("releasing held mail removes the held label and optionally restores INBOX", async () => {
+  let inbox = true;
   const gmail = client((url, init) => {
     expect(url.pathname).toEndWith("/messages/a1/modify");
-    expect(JSON.parse(String(init.body))).toEqual({ addLabelIds: ["INBOX"] });
+    expect(JSON.parse(String(init.body))).toEqual({ addLabelIds: inbox ? ["INBOX"] : [], removeLabelIds: ["Label_held"] });
     return Response.json({ id: "a1" });
   });
-  await gmail.restore("a1");
+  await gmail.releaseHeld("a1", "Label_held", true);
+  inbox = false;
+  await gmail.releaseHeld("a1", "Label_held", false);
+  await expect(gmail.releaseHeld("a1", "STARRED", true)).rejects.toThrow("unsafe_label_mutation");
   await expect(gmail.modify("a1", ["INBOX"], [])).rejects.toThrow("unsafe_label_mutation");
 });
 

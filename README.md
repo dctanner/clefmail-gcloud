@@ -2,7 +2,7 @@
 
 Clefmail organizes new Gmail messages as they arrive. It uses Clef or Jev to choose a label from your rules, with optional archiving for mail that needs no inbox attention. You keep using Gmail, where the labels and messages appear.
 
-For more control over who reaches your inbox, enable human verification. Clefmail holds mail from unknown senders and emails them a link to confirm they are human. Once they complete the check, their held mail returns to your inbox and they become a Google Contact.
+AI archiving and human verification are enabled by default. Classification and archiving run first. Messages archived under your rules skip human verification. For mail that remains in the inbox, human verification holds mail from unknown senders and emails them a link to confirm they are human. Once they complete the check, their held mail returns to your inbox and they become a Google Contact.
 
 Clefmail is self-hosted on Google Cloud and supports up to ten mailboxes with separate rules. **Ready for production:** deployment and live-mail testing are complete, including sender verification.
 
@@ -12,7 +12,7 @@ Clefmail is self-hosted on Google Cloud and supports up to ten mailboxes with se
 
 Processing starts with mail received after the first Gmail watch is registered. Clefmail skips Spam, Trash, drafts and sent-only messages. Read mail and messages archived by a Gmail filter remain eligible for labeling. Each update applies to an individual message and preserves its unread status and unrelated labels.
 
-AI archiving defaults to `true`. Set `archiveEnabled: false` for labeling only. Contacts are protected from Clefmail archiving; starred and important messages are also protected from AI archiving. Human verification uses its own `humanVerification` setting, which defaults to `false`.
+AI archiving defaults to `true`. Set `archiveEnabled: false` for labeling only. Contacts are protected from Clefmail archiving; starred and important messages are also protected from AI archiving. Human verification uses its own `humanVerification` setting, which defaults to `true`.
 
 ### Labels in Gmail
 
@@ -26,15 +26,19 @@ The example configuration includes three category labels. You can rename these o
 | `Clefmail/Held` | The message is waiting for its sender to complete human verification; removed when the message is released |
 | `Clefmail/Processed` | Hidden marker used to track handled messages and prevent repeated classification; remains after release from a hold |
 
-A classified message receives at most one configured category label. When the model is uncertain, Clefmail applies only `Clefmail/Processed` and keeps the message's inbox status. Held messages receive both `Clefmail/Held` and `Clefmail/Processed`; they bypass AI classification, including when released.
+A classified message receives at most one configured category label. When the model is uncertain, Clefmail applies only `Clefmail/Processed` and keeps the message's inbox status. Held messages retain their category label and receive both `Clefmail/Held` and `Clefmail/Processed`. They have already been classified and keep their labels when released.
 
 ### Human verification
 
-When enabled, Clefmail checks Google Contacts, saved verification status and retained Gmail correspondence to decide whether a sender needs verification. Existing contacts and previously verified senders can reach the inbox. Earlier correspondence also bypasses the human check, though AI archiving can still apply to a sender outside your contacts.
+For messages that remain in the inbox after classification and archiving, Clefmail checks Google Contacts, saved verification status and retained Gmail correspondence to decide whether a sender needs verification. Existing contacts and previously verified senders can reach the inbox. Earlier correspondence also bypasses the human check, though AI archiving can still apply to a sender outside your contacts.
 
 ```mermaid
 flowchart TD
-    A[Email from an unknown sender] --> B[Add Clefmail/Held and Clefmail/Processed]
+    A[Classify and apply category label] --> Archive{Archive under mailbox policy?}
+    Archive -->|Yes| Done[Archive and skip human verification]
+    Archive -->|No, still in inbox| Check{Unknown sender and verification enabled?}
+    Check -->|No| Keep[Keep in inbox]
+    Check -->|Yes| B[Add Clefmail/Held and Clefmail/Processed]
     B --> C[Remove from inbox and save the message for release]
     C --> D{Safe to send an automatic reply?}
     D -->|Yes| E[Email sender: Please verify you are human]
@@ -47,7 +51,7 @@ flowchart TD
     K --> L[Future mail bypasses verification and Clefmail archiving]
 ```
 
-Further mail from a sender awaiting verification joins the hold. Clefmail reuses the pending challenge while its link remains valid. Messages moved to Trash or Spam stay there when verification completes, and mail originally archived by a Gmail filter stays archived.
+Further mail from a sender awaiting verification is classified first. Mail that remains in the inbox joins the hold. Clefmail reuses the pending challenge while its link remains valid. Messages moved to Trash or Spam stay there when verification completes, and mail originally archived by a Gmail filter stays archived.
 
 Automated replies, bulk mail and other messages that could cause reply loops may be held without a challenge. The owner can add a sender to Google Contacts; subsequent processing releases their held mail. See the [human verification guide](docs/VERIFICATION.md) for setup and the full handling rules.
 
@@ -144,7 +148,7 @@ Other optional account settings:
 | --- | --- | --- |
 | `enabled` | `true` | Whether to process and renew watches for this mailbox |
 | `archiveEnabled` | `true` | Allow the AI classifier to archive eligible messages (contacts are always protected) |
-| `humanVerification` | `false` | Independently quarantine new unknown senders until verified; requires verification service configuration |
+| `humanVerification` | `true` | Independently quarantine new unknown senders until verified; requires verification service configuration |
 | `probability` | `0.75` | Minimum category probability |
 | `margin` | `0.15` | Minimum margin over the runner-up category |
 | `archiveThreshold` | `0.95` | Minimum archive probability |
@@ -238,6 +242,8 @@ unset GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLASSIFIER_API_KEY
 The commands above are for **initial creation**. If a secret already exists, inspect it and use `gcloud secrets versions add` with the appropriate `--data-file` instead. Do not delete working secrets to repeat the walkthrough. Record new version numbers for deployment; never paste secret values into `SECRET_BINDINGS`.
 
 ## 6. Deploy and start processing
+
+Complete the [verification service setup](docs/VERIFICATION.md#deployment-sequence) before enabling processing with the default configuration. Set the real verification URL and Turnstile site key in `config.json`. For initial provisioning, temporarily set `humanVerification: false` until the public service is ready, then enable it on both services.
 
 Use the uploaded configuration version that contains your chosen mailbox and archiving settings.
 

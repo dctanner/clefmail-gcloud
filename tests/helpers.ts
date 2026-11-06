@@ -7,6 +7,7 @@ import type { EmailText, Message } from "../src/text.js";
 
 export const account = accountSchema.parse({
   id: "personal", email: "owner@example.com", refreshTokenEnv: "GMAIL_PERSONAL_REFRESH_TOKEN",
+  humanVerification: false,
   prompt: "Archive routine receipts only.",
   labels: [{ id: "receipts", name: "Clefmail/Receipts", description: "Routine receipts" }],
 });

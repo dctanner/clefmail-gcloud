@@ -7,17 +7,17 @@ and restores messages that originally arrived in the inbox.
 
 ## Behavior
 
-Enable `humanVerification: true` on a mailbox to hold new unknown senders:
+`humanVerification` defaults to `true` on each mailbox to hold mail from unknown senders after classification. Clefmail applies category labels and the AI archive policy first. Archived mail skips verification. Mail already outside the inbox also skips a new challenge. For messages that remain in the inbox:
 
 1. Check Google Contacts. Contacts are never archived by either Clefmail archive path, even when verification is disabled.
 2. Check durable sender state **before** searching history. A pending sender's own held messages and Clefmail's outgoing challenge do not make them trusted.
 3. For a sender without state, search retained Gmail incoming/sent metadata for exact correspondence. Earlier incoming mail or an email the mailbox has sent to the address exempts the sender from verification. Existing correspondence does **not** exempt non-contacts from the ordinary AI archive policy.
-4. For an unknown sender, persist a pending record, archive the incoming message, and send a verification link. No AI inference is performed on quarantined messages. Further messages from that pending sender are archived, without repeated challenges while the link is valid.
+4. For an unknown sender, persist a pending record, archive the incoming message, and send a verification link. The message keeps its category label. Further messages from that sender are also classified first; those kept in the inbox join the hold, without repeated challenges while the link is valid.
 5. The sender opens the link and completes Cloudflare Turnstile. Server-side validation checks success, hostname, action, and binding to this particular verification capability. GET requests and email link scanners cannot verify someone.
 6. Under the same mailbox lease used by processing, create the sender's Google Contact, restore held messages that were originally in the inbox, and send a success email **to the verified sender**. Messages that were already archived by a Gmail filter, deleted, moved to Spam/Trash, or made drafts are not restored.
 7. Later mail bypasses quarantine. Contacts and durable verified-sender state protect it from the AI archiver.
 
-`archiveEnabled` controls **AI archiving only**. Human-verification quarantine is independently enabled and applies even to starred/important or body-unavailable mail. It never processes Spam, Trash, drafts, or sent-only messages. Gmail filters and other applications remain outside Clefmail's control.
+`archiveEnabled` controls **AI archiving only**. Human-verification quarantine is independently enabled and follows the AI archive decision. It can hold remaining inbox mail even when starred/important or body-unavailable. It never processes Spam, Trash, drafts, or sent-only messages. Gmail filters and other applications remain outside Clefmail's control.
 
 The first challenge is an automatic reply with an `In-Reply-To` header when the original Message-ID is usable. The success email is a separate confirmation. Subjects and bodies use fixed templates; incoming message bodies are never copied into notices.
 
@@ -120,7 +120,9 @@ subject `Human verification test`. This requires the public verification service
 and Turnstile settings. You can leave `humanVerification: false` to keep ordinary
 mail on the usual labeling path.
 
-The match is case-sensitive and includes whitespace. Each matching incoming
+Classification and the archive policy also run before this diagnostic mode. Only mail that remains in the inbox reaches the sender check.
+
+The match is case-sensitive and includes whitespace. Each eligible matching incoming
 message gets a separate test record and verification link, including mail from
 your own address, existing contacts, and previous correspondents. Verification
 restores that test message and sends a confirmation. Test records leave Google

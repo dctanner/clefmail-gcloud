@@ -46,7 +46,8 @@ export class Processor {
     const resume = verify &&
       await this.deps.verification?.needsResume(account, message);
     if (message.labelIds?.includes(labels.processed) && !resume) return;
-    if (verify) {
+    if (verify && !this.deps.verification) throw new SafeError("verification_not_configured");
+    if (resume) {
       if (!this.deps.verification) throw new SafeError("verification_not_configured");
       if (await this.deps.verification.quarantine(account, message, gmail, labels, session)) return;
       if (message.labelIds?.includes(labels.processed)) return;
@@ -84,7 +85,10 @@ export class Processor {
     const protectedSender = !sender || sender === account.email || await gmail.hasContact(sender) ||
       !!(account.humanVerification && await this.deps.verification?.trusted(account, sender));
     const block = protectedSender ? "protected_sender" : archiveBlock(decision, account, current.labelIds || []);
-    const add = [labels.processed];
+    const checkSender = verify && block !== null && !!current.labelIds?.includes("INBOX");
+    // Leave completion unmarked until the sender check succeeds. A retry can
+    // repeat classification safely if it failed before quarantine was journaled.
+    const add = checkSender ? [] : [labels.processed];
     if (decision.label) {
       const selected = labels.options[decision.label];
       if (!selected) throw new SafeError("unmapped_label");
@@ -93,7 +97,12 @@ export class Processor {
     await session.assertOwned();
     signal.throwIfAborted();
     // One message-level modification, never a thread update, send, trash, or delete.
-    await gmail.modify(id, add, block === null ? ["INBOX"] : []);
+    if (add.length || block === null) await gmail.modify(id, add, block === null ? ["INBOX"] : []);
+    if (checkSender) {
+      if (await this.deps.verification!.quarantine(account, message, gmail, labels, session)) return;
+      await session.assertOwned();
+      await gmail.modify(id, [labels.processed], []);
+    }
     this.log("message_processed", {
       account: account.id, message: id, label: decision.label,
       archived: block === null, archiveBlock: block, reason: decision.reason,

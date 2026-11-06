@@ -18,7 +18,7 @@ export const accountSchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
   enabled: z.boolean().default(true),
   archiveEnabled: z.boolean().default(true),
-  humanVerification: z.boolean().default(false),
+  humanVerification: z.boolean().default(true),
   humanVerificationTest: z.boolean().default(false),
   probability: z.number().min(0.5).max(1).default(0.75),
   margin: z.number().min(0).max(1).default(0.15),

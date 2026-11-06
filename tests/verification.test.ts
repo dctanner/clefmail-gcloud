@@ -22,12 +22,12 @@ const protectedAccount = accountSchema.parse({ ...account, humanVerification: tr
 const settings = { publicUrl: "https://verify.example.com", siteKey: "synthetic-key" };
 const config = configSchema.parse({ provider: { kind: "jev" }, verification: settings, accounts: [protectedAccount] });
 
-function fixture() {
+function fixture(classify = async () => decision) {
   const state = new MemoryState(), senders = new MemorySenders(), gmail = new FakeGmail();
   let classified = 0;
   const verification = new Verification({ state, senders, gmail: () => gmail, publicUrl: settings.publicUrl });
   const processor = new Processor({ state, gmail: () => gmail, verification,
-    classify: async () => { classified++; return decision; }, log: () => {} });
+    classify: async () => { classified++; return classify(); }, log: () => {} });
   const record = async () => (await senders.read(account.id, digest(sender)))!.record;
   return { state, senders, gmail, verification, processor, record, classified: () => classified };
 }
@@ -38,7 +38,7 @@ async function next(f: ReturnType<typeof fixture>, id: string, cursor = "250") {
   await f.processor.notification(protectedAccount, cursor);
 }
 
-test("new sender archived before challenge; repeats stay archived without more notices or AI", async () => {
+test("new sender labeled before challenge; each new message is classified before being held", async () => {
   const f = fixture();
   const send = f.gmail.sendNotice.bind(f.gmail);
   f.gmail.sendNotice = async (...args) => {
@@ -47,7 +47,7 @@ test("new sender archived before challenge; repeats stay archived without more n
     await send(...args);
   };
   await f.processor.notification(protectedAccount, "200");
-  expect(f.classified()).toBe(0);
+  expect(f.classified()).toBe(1);
   expect(f.gmail.notices).toHaveLength(1);
   expect(f.gmail.notices[0]!.body).toContain("https://verify.example.com/verify#personal/");
   f.gmail.corresponded = true; // Pending messages themselves must never confer trust.
@@ -55,6 +55,64 @@ test("new sender archived before challenge; repeats stay archived without more n
   expect(f.gmail.messages.get("a2")!.labelIds).not.toContain("INBOX");
   expect(f.gmail.notices).toHaveLength(1);
   expect((await f.record()).pending).toHaveLength(2);
+  expect(f.classified()).toBe(2);
+  expect(f.gmail.messages.get("a2")!.labelIds).toContain("Label_receipts");
+});
+
+test("AI-archived mail skips sender verification entirely", async () => {
+  const f = fixture();
+  f.gmail.hasCorresponded = async () => { throw new Error("Verification must be skipped"); };
+  await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
+  expect(f.classified()).toBe(1);
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_done");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect(f.gmail.notices).toHaveLength(0);
+  expect(f.senders.values.size).toBe(0);
+});
+
+test("mail kept by the model is labeled before the sender challenge", async () => {
+  const f = fixture(async () => ({ ...decision, archive: false }));
+  const send = f.gmail.sendNotice.bind(f.gmail);
+  f.gmail.sendNotice = async (...args) => {
+    expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+    await send(...args);
+  };
+  await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
+  expect(f.gmail.notices).toHaveLength(1);
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_held");
+});
+
+test("classification failure leaves mail untouched and sends no challenge", async () => {
+  const f = fixture(async () => { throw new SafeError("provider_unavailable"); });
+  await expect(f.processor.notification(protectedAccount, "200")).rejects.toThrow("provider_unavailable");
+  expect(f.gmail.modifications).toHaveLength(0);
+  expect(f.gmail.notices).toHaveLength(0);
+  expect(f.senders.values.size).toBe(0);
+  expect(f.state.snapshot!.data.historyId).toBe("100");
+});
+
+test("failed sender lookup after labeling retries without losing verification", async () => {
+  const f = fixture();
+  f.gmail.hasCorresponded = async () => { throw new SafeError("lookup_failed"); };
+  await expect(f.processor.notification(protectedAccount, "200")).rejects.toThrow("lookup_failed");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_done");
+  f.gmail.hasCorresponded = async () => false;
+  await f.processor.notification(protectedAccount, "200");
+  expect(f.gmail.notices).toHaveLength(1);
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_held");
+});
+
+test("mail already outside the inbox is labeled without a sender challenge", async () => {
+  const f = fixture();
+  f.gmail.messages.set("a1", message("a1", []));
+  await f.processor.notification(protectedAccount, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_done");
+  expect(f.gmail.notices).toHaveLength(0);
+  expect(f.senders.values.size).toBe(0);
 });
 
 test("verification restores held messages, adds contact, sends success once and protects future mail", async () => {
@@ -115,6 +173,7 @@ test("failed challenge send retries despite processed marker and preserves pendi
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.notices).toHaveLength(1);
   expect((await f.record()).pending).toHaveLength(1);
+  expect(f.classified()).toBe(1);
 });
 
 test("partial restoration failure resumes without repeating successful restores or success mail", async () => {
@@ -221,7 +280,7 @@ test("exact test subject challenges self and trusted senders with ordinary verif
     expect(f.gmail.messages.get("test1")!.labelIds).not.toContain("INBOX");
     expect(f.gmail.messages.get("test1")!.labelIds).toContain("Label_held");
     expect(f.gmail.notices).toHaveLength(1);
-    expect(f.classified()).toBe(0);
+    expect(f.classified()).toBe(1);
     const key = digest(`test:${from}:test1`);
     const record = (await f.senders.read(account.id, key))!.record;
     expect(record.test).toBe(true);
@@ -299,4 +358,15 @@ test("invalid origins, missing proof, oversized and invalid account inputs never
   expect((await f.handler(f.request({ token: "x".repeat(5000) }))).status).toBe(413);
   expect((await f.handler(f.request({ account: "unknown" }))).status).toBe(400);
   expect(f.completions()).toBe(0); expect(f.challenges()).toBe(0);
+});
+
+
+test("production defaults enable archiving and verification with diagnostics off", () => {
+  const { humanVerification, archiveEnabled, humanVerificationTest, ...base } = account;
+  const defaults = accountSchema.parse(base);
+  expect(defaults.archiveEnabled).toBe(true);
+  expect(defaults.humanVerification).toBe(true);
+  expect(defaults.humanVerificationTest).toBe(false);
+  expect(() => configSchema.parse({ provider: { kind: "jev" }, accounts: [base] })).toThrow();
+  expect(configSchema.parse({ provider: { kind: "jev" }, verification: settings, accounts: [base] }).accounts[0]!.humanVerification).toBe(true);
 });

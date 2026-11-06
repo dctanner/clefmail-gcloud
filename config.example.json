@@ -1,0 +1,32 @@
+{
+  "provider": {
+    "kind": "clef",
+    "accountId": "00000000000000000000000000000000"
+  },
+  "accounts": [
+    {
+      "id": "personal",
+      "email": "you@example.com",
+      "refreshTokenEnv": "GMAIL_PERSONAL_REFRESH_TOKEN",
+      "archiveEnabled": true,
+      "prompt": "Choose the best label, or no_match if uncertain. Archive only routine messages that need no response, task, or inbox attention. Routine receipts and newsletters may be archived. Keep payment problems, direct requests, time-sensitive notices, and personal conversations in the inbox.",
+      "labels": [
+        {
+          "id": "action",
+          "name": "Clefmail/Action",
+          "description": "Requests, tasks, and personal messages needing my attention."
+        },
+        {
+          "id": "receipts",
+          "name": "Clefmail/Receipts",
+          "description": "Purchase confirmations, invoices, and transaction records."
+        },
+        {
+          "id": "newsletters",
+          "name": "Clefmail/Newsletters",
+          "description": "Subscriptions and informational newsletters."
+        }
+      ]
+    }
+  ]
+}

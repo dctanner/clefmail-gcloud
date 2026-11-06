@@ -32,47 +32,11 @@ A classified message receives at most one configured category label. When the mo
 
 For messages that remain in the inbox after classification and archiving, Clefmail checks Google Contacts, saved verification status and retained Gmail correspondence to decide whether a sender needs verification. Existing contacts and previously verified senders can reach the inbox. Earlier correspondence also bypasses the human check, though AI archiving can still apply to a sender outside your contacts.
 
-```mermaid
-flowchart TD
-    A[Classify and apply category label] --> Archive{Archive under mailbox policy?}
-    Archive -->|Yes| Done[Archive and skip human verification]
-    Archive -->|No, still in inbox| Check{Unknown sender and verification enabled?}
-    Check -->|No| Keep[Keep in inbox]
-    Check -->|Yes| B[Add Clefmail/Held and Clefmail/Processed]
-    B --> C[Remove from inbox and save the message for release]
-    C --> D{Safe to send an automatic reply?}
-    D -->|Yes| E[Email sender: Please verify you are human]
-    D -->|No| F[Keep held without sending a challenge]
-    E --> G[Sender opens the link and completes Cloudflare Turnstile]
-    G --> H[Public verification service validates the result]
-    H --> I[Add sender to Google Contacts]
-    I --> J[Remove Clefmail/Held and restore eligible held inbox messages]
-    J --> K[Email sender: Email verification successful]
-    K --> L[Future mail bypasses verification and Clefmail archiving]
-```
-
 Further mail from a sender awaiting verification is classified first. Mail that remains in the inbox joins the hold. Clefmail reuses the pending challenge while its link remains valid. Messages moved to Trash or Spam stay there when verification completes, and mail originally archived by a Gmail filter stays archived.
 
 Automated replies, bulk mail and other messages that could cause reply loops may be held without a challenge. The owner can add a sender to Google Contacts; subsequent processing releases their held mail. See the [human verification guide](docs/VERIFICATION.md) for setup and the full handling rules.
 
 ### Google Cloud services
-
-```mermaid
-flowchart LR
-    Gmail[Gmail] -->|New-mail notifications| PubSub[Pub/Sub]
-    PubSub -->|Authenticated push| Processor[Private Cloud Run processor]
-    Scheduler[Cloud Scheduler] -->|Daily watch renewal| Processor
-    Processor -->|Label and archive| Gmail
-    Processor -->|Classify email text| Model[Clef or Jev]
-    Sender[Sender's browser] -->|Human check| Verify[Public Cloud Run verification service]
-    Verify --> Turnstile[Cloudflare Turnstile]
-    Verify -->|Release held mail and send confirmation| Gmail
-    Verify -->|Save verified sender| Contacts[Google Contacts]
-    Processor --- State[Cloud Storage: checkpoints and sender records]
-    Verify --- State
-    Secrets[Secret Manager] -.-> Processor
-    Secrets -.-> Verify
-```
 
 The processor accepts authenticated internal requests. The public service handles verification links. Both use the same private state bucket so message processing and verification can coordinate changes to the mailbox. Secret Manager supplies credentials and configuration.
 

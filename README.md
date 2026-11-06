@@ -8,19 +8,7 @@ Clefmail is self-hosted on Google Cloud and supports up to ten mailboxes with se
 
 ## How mail moves through Clefmail
 
-```mermaid
-flowchart TD
-    A[New email arrives in Gmail] --> B[Gmail sends a notification through Pub/Sub]
-    B --> C[Private Cloud Run service reads the new message]
-    C --> D{Sender needs human verification?}
-    D -->|Yes| H[Hold outside the inbox with Clefmail/Held]
-    H --> V[Sender verification flow below]
-    D -->|No| E[Clef or Jev evaluates the message against your rules]
-    E --> F[Apply a category when confident and mark Clefmail/Processed]
-    F --> G{Archiving enabled and all checks pass?}
-    G -->|Yes| I[Archive the message]
-    G -->|No| J[Keep its current inbox status]
-```
+![Marker-pen diagram of Clefmail: new Gmail messages follow AI labeling or human verification, with a legend for category, held and processed labels.](docs/images/clefmail-flow-marker.png)
 
 Processing starts with mail received after the first Gmail watch is registered. Clefmail skips Spam, Trash, drafts and sent-only messages. Read mail and messages archived by a Gmail filter remain eligible for labeling. Each update applies to an individual message and preserves its unread status and unrelated labels.
 

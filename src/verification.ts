@@ -151,7 +151,7 @@ export class Verification {
       return false;
     }
     await session.assertOwned();
-    await gmail.modify(message.id!, [labels.processed, labels.held], ["INBOX"]);
+    await gmail.modify(message.id!, [labels.held], ["INBOX"]);
     if (!record.challenged && mayChallenge(message, sender)) {
       const link = `${this.deps.publicUrl.replace(/\/$/, "")}/verify#${account.id}/${key}/${record.token}`;
       await session.assertOwned();

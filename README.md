@@ -24,9 +24,8 @@ The example configuration includes three category labels. You can rename these o
 | `Clefmail/Receipts` | A purchase confirmation, invoice or transaction record |
 | `Clefmail/Newsletters` | A subscription or informational newsletter |
 | `Clefmail/Held` | The message is waiting for its sender to complete human verification; removed when the message is released |
-| `Clefmail/Processed` | Hidden marker used to track handled messages and prevent repeated classification; remains after release from a hold |
 
-A classified message receives at most one configured category label. When the model is uncertain, Clefmail applies only `Clefmail/Processed` and keeps the message's inbox status. Held messages retain their category label and receive both `Clefmail/Held` and `Clefmail/Processed`. They have already been classified and keep their labels when released.
+A classified message receives at most one configured category label. When the model is uncertain, Clefmail keeps the message's labels and inbox status. Held messages retain their category label and receive `Clefmail/Held`. They have already been classified and keep their labels when released. Clefmail records completed processing in its private Cloud Storage bucket, so tracking adds no label to your mail.
 
 ### Human verification
 
@@ -156,7 +155,7 @@ export GMAIL_PERSONAL_REFRESH_TOKEN="$(<.secrets/personal.token)"
 bun run setup
 ```
 
-`setup` verifies the mailbox and creates the configured category labels, `Clefmail/Held`, and the hidden `Clefmail/Processed` label. **It does not read message bodies, classify messages, or start a watch.** The runtime only looks up labels; rerun setup if you deliberately change the label configuration.
+`setup` verifies the mailbox and creates the configured category labels and `Clefmail/Held`. **It does not read message bodies, classify messages, or start a watch.** The runtime only looks up labels; rerun setup if you deliberately change the label configuration.
 
 Bun loads `.env` automatically for local tools; Bash and `gcloud` do not. The exported token above takes precedence over the placeholder in `.env`. Do not use shell tracing (`set -x`) while handling credentials.
 
@@ -283,10 +282,10 @@ Disable processing and revoke Gmail grants first. Then remove the dedicated Sche
 
 ## Safety, privacy and deliberate limits
 
-- **Message-level only:** classification adds a category plus `Clefmail/Processed` and may remove `INBOX`. Optional verification sends challenge/confirmation emails, creates contacts, and restores only messages recorded as having been in the inbox before quarantine. It never deletes, trashes, marks read, or modifies a whole thread. Unread status and unrelated labels are preserved.
-- **AI archive guardrails:** contacts, the mailbox's own address, and ambiguous/missing senders are protected. Contacts API failures retry instead of permitting an archive. A usable, untruncated plain-text body and valid confident category are required. Freshly checked starred, important, Spam, Trash and draft messages cannot be archived. Header-only classification requires at least 0.90 probability and cannot archive. Invalid archive output means label-only; invalid/abstaining category decisions receive only the processing marker. Opt-in human-verification quarantine is independent of these AI thresholds and starred/important protection; Spam, Trash and drafts remain excluded.
+- **Message-level only:** classification adds a category and may remove `INBOX`. Optional verification sends challenge/confirmation emails, creates contacts, and restores only messages recorded as having been in the inbox before quarantine. It never deletes, trashes, marks read, or modifies a whole thread. Unread status and unrelated labels are preserved.
+- **AI archive guardrails:** contacts, the mailbox's own address, and ambiguous/missing senders are protected. Contacts API failures retry instead of permitting an archive. A usable, untruncated plain-text body and valid confident category are required. Freshly checked starred, important, Spam, Trash and draft messages cannot be archived. Header-only classification requires at least 0.90 probability and cannot archive. Invalid archive output means label-only; invalid/abstaining category decisions are recorded privately. Opt-in human-verification quarantine is independent of these AI thresholds and starred/important protection; Spam, Trash and drafts remain excluded.
 - **Text only:** no attachments, HTML conversion, external images, linked-page fetching or conversation history. Email text exists in request memory and goes to the selected provider. Logs contain opaque message/account IDs and outcome codes, not subjects or bodies.
-- **Persistent state:** Secret Manager holds credentials/configuration, Pub/Sub holds mailbox/history metadata, Storage holds cursors/watch expiry/leases and optional sender records (email address, secret verification capability, pending message IDs and completion state), and Gmail holds processing markers. Treat the private bucket as sensitive mailbox data; there is no automatic sender-record expiration or deletion.
+- **Persistent state:** Secret Manager holds credentials/configuration, Pub/Sub holds mailbox/history metadata, Storage holds cursors/watch expiry/leases and optional sender records (email address, secret verification capability, pending message IDs and completion state), and private per-message completion records prevent repeated processing. Treat the private bucket as sensitive mailbox data; there is no automatic sender-record expiration or deletion.
 - **At-least-once, not exactly-once:** crashes can repeat inference and its cost. Processing markers usually prevent repeated completed work. Verification also journals pending messages and completion stages; deterministic Message-IDs and Sent searches reduce duplicate notices, but Gmail send/contact creation is not transactional and ambiguous failures can still duplicate external effects. Removing those markers can permit reprocessing if history is replayed.
 - **No historical recovery:** an expired history cursor is reset to the current baseline; missed mail is not recovered. A failed message can delay subsequent history until retry; notifications can eventually dead-letter. No automatic dead-letter replay, inbox scan, reconciliation job or backfill is provided.
 - **Concurrent edits:** Gmail offers no conditional label transaction. A small race with your manual Gmail changes remains unavoidable.

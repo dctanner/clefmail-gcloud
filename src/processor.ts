@@ -45,12 +45,13 @@ export class Processor {
     const verify = account.humanVerification || isVerificationTest(account, message);
     const resume = verify &&
       await this.deps.verification?.needsResume(account, message);
-    if (message.labelIds?.includes(labels.processed) && !resume) return;
+    const processed = message.labelIds?.includes(labels.processed) || await this.deps.state.isProcessed(account.id, id);
+    if (processed && !resume) return;
     if (verify && !this.deps.verification) throw new SafeError("verification_not_configured");
     if (resume) {
       if (!this.deps.verification) throw new SafeError("verification_not_configured");
       if (await this.deps.verification.quarantine(account, message, gmail, labels, session)) return;
-      if (message.labelIds?.includes(labels.processed)) return;
+      if (processed) return;
     }
     const email = await extract(message, attachmentId => gmail.attachment(id, attachmentId));
     if (headerOnly) Object.assign(email, { body: "", bodyUnavailable: true, truncated: true });
@@ -86,9 +87,7 @@ export class Processor {
       !!(account.humanVerification && await this.deps.verification?.trusted(account, sender));
     const block = protectedSender ? "protected_sender" : archiveBlock(decision, account, current.labelIds || []);
     const checkSender = verify && block !== null && !!current.labelIds?.includes("INBOX");
-    // Leave completion unmarked until the sender check succeeds. A retry can
-    // repeat classification safely if it failed before quarantine was journaled.
-    const add = checkSender ? [] : [labels.processed];
+    const add: string[] = [];
     if (decision.label) {
       const selected = labels.options[decision.label];
       if (!selected) throw new SafeError("unmapped_label");
@@ -100,8 +99,7 @@ export class Processor {
     if (add.length || block === null) await gmail.modify(id, add, block === null ? ["INBOX"] : []);
     if (checkSender) {
       if (await this.deps.verification!.quarantine(account, message, gmail, labels, session)) return;
-      await session.assertOwned();
-      await gmail.modify(id, [labels.processed], []);
+
     }
     this.log("message_processed", {
       account: account.id, message: id, label: decision.label,
@@ -140,6 +138,8 @@ export class Processor {
           for (const id of new Set((record.messagesAdded || []).map(m => m.message.id))) {
             try {
               await this.processMessage(account, id, gmail, labels, session, signal);
+              await session.assertOwned();
+              await this.deps.state.markProcessed(account.id, id);
             } catch (error) {
               if (!(error instanceof HttpError) || error.service !== "gmail" || error.status !== 404)
                 throw error;

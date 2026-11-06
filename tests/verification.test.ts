@@ -65,7 +65,7 @@ test("AI-archived mail skips sender verification entirely", async () => {
   await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
   expect(f.classified()).toBe(1);
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
-  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_done");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_done");
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
   expect(f.gmail.notices).toHaveLength(0);
@@ -110,7 +110,7 @@ test("mail already outside the inbox is labeled without a sender challenge", asy
   f.gmail.messages.set("a1", message("a1", []));
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
-  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_done");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_done");
   expect(f.gmail.notices).toHaveLength(0);
   expect(f.senders.values.size).toBe(0);
 });
@@ -167,7 +167,7 @@ test("failed challenge send retries despite processed marker and preserves pendi
   const send = f.gmail.sendNotice.bind(f.gmail);
   f.gmail.sendNotice = async () => { throw new SafeError("send_failed"); };
   await expect(f.processor.notification(protectedAccount, "200")).rejects.toThrow("send_failed");
-  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_done");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_done");
   expect((await f.record()).challenged).toBe(false);
   f.gmail.sendNotice = send;
   await f.processor.notification(protectedAccount, "200");
@@ -377,7 +377,7 @@ test("BIMI exemption keeps category without creating contact, challenge or sende
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
-  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_done");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_done");
   expect(f.gmail.notices).toHaveLength(0);
   expect(f.gmail.contacts.size).toBe(0);
   expect(f.senders.values.size).toBe(0);

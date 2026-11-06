@@ -34,6 +34,9 @@ export const message = (id = "a1", labels = ["INBOX"]): Message => ({
 });
 
 export class MemoryState implements StateStore {
+  processed = new Set<string>();
+  async isProcessed(account: string, id: string) { return this.processed.has(`${account}/${id}`); }
+  async markProcessed(account: string, id: string) { this.processed.add(`${account}/${id}`); }
   snapshot: Snapshot | null;
   writes: State[] = [];
   constructor(cursor: string | null = "100") {

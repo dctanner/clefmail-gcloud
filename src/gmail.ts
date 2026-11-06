@@ -161,7 +161,10 @@ export class Gmail implements GmailPort {
       result.labels.push(created);
       return created.id;
     };
-    const processed = await find(PROCESSED_LABEL, true);
+    // Recognize the old marker during migration, but never create it.
+    const legacy = result.labels.find(l => l.name === PROCESSED_LABEL);
+    if (legacy && legacy.type !== "user") throw new SafeError("system_label_not_allowed");
+    const processed = legacy?.id || "";
     const options: Record<string, string> = {};
     for (const label of account.labels) options[label.id] = await find(label.name);
     const held = await find(HELD_LABEL);

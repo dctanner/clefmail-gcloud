@@ -12,6 +12,8 @@ const stateSchema = z.object({
 export type State = z.infer<typeof stateSchema>;
 export interface Snapshot { data: State; generation: string }
 export interface StateStore {
+  isProcessed(accountId: string, messageId: string): Promise<boolean>;
+  markProcessed(accountId: string, messageId: string): Promise<void>;
   read(accountId: string): Promise<Snapshot | null>;
   write(accountId: string, state: State, generation: string): Promise<void>;
 }
@@ -21,6 +23,26 @@ export class GcsStateStore implements StateStore {
     retryOptions: { maxRetries: 2, totalTimeout: 10, maxRetryDelay: 1 },
   });
   constructor(private bucket: string) {}
+
+  private processedFile(accountId: string, messageId: string) {
+    if (!/^[a-z][a-z0-9_-]{0,49}$/.test(accountId) || !/^[a-zA-Z0-9_-]{1,200}$/.test(messageId))
+      throw new SafeError("invalid_processed_key");
+    return this.storage.bucket(this.bucket).file(`processed/${accountId}/${messageId}.json`);
+  }
+
+  async isProcessed(accountId: string, messageId: string): Promise<boolean> {
+    const [exists] = await this.processedFile(accountId, messageId).exists();
+    return exists;
+  }
+
+  async markProcessed(accountId: string, messageId: string): Promise<void> {
+    try {
+      await this.processedFile(accountId, messageId).save("{}", {
+        resumable: false, validation: "crc32c", preconditionOpts: { ifGenerationMatch: 0 },
+        metadata: { contentType: "application/json", cacheControl: "no-store" },
+      });
+    } catch (error: any) { if (error?.code !== 412) throw error; }
+  }
 
   private file(accountId: string, generation?: string) {
     if (!/^[a-z][a-z0-9_-]{0,49}$/.test(accountId)) throw new SafeError("invalid_account_id");

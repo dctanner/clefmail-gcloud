@@ -21,7 +21,7 @@ test("notification processes added IDs, labels + archives once, then checkpoints
   const f = fixture();
   await f.processor.notification(account, "200");
   expect(f.gmail.historyCalls).toEqual([["100", undefined]]);
-  expect(f.gmail.modifications).toEqual([{ id: "a1", add: ["Label_done", "Label_receipts"], remove: ["INBOX"] }]);
+  expect(f.gmail.modifications).toEqual([{ id: "a1", add: ["Label_receipts"], remove: ["INBOX"] }]);
   expect(f.state.snapshot!.data.historyId).toBe("200");
   expect(f.state.snapshot!.data.lease).toBeUndefined();
   await f.processor.notification(account, "200");
@@ -83,10 +83,11 @@ test("a malformed label response becomes a processed abstention, never an archiv
   const f = fixture();
   f.deps.classify = async () => { throw new SafeError("invalid_label_answer"); };
   await f.processor.notification(account, "200");
-  expect(f.gmail.modifications).toEqual([{ id: "a1", add: ["Label_done"], remove: [] }]);
+  expect(f.gmail.modifications).toEqual([]);
+  expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
 });
 
-test("unknown mutation outcome is reconciled by processing marker on retry", async () => {
+test("unknown mutation outcome retries safely before private completion is recorded", async () => {
   const f = fixture();
   const modify = f.gmail.modify.bind(f.gmail);
   let fail = true;
@@ -97,8 +98,8 @@ test("unknown mutation outcome is reconciled by processing marker on retry", asy
   await expect(f.processor.notification(account, "200")).rejects.toThrow();
   expect(f.state.snapshot!.data.historyId).toBe("100");
   await f.processor.notification(account, "200");
-  expect(f.count()).toBe(1);
-  expect(f.gmail.modifications.length).toBe(1);
+  expect(f.count()).toBe(2);
+  expect(f.gmail.modifications.length).toBe(2);
   expect(f.state.snapshot!.data.historyId).toBe("200");
 });
 
@@ -197,7 +198,7 @@ test("oversized message falls back to label-only header metadata instead of bloc
     return original(id, format);
   };
   await f.processor.notification(account, "200");
-  expect(f.gmail.modifications).toEqual([{ id: "a1", add: ["Label_done", "Label_receipts"], remove: [] }]);
+  expect(f.gmail.modifications).toEqual([{ id: "a1", add: ["Label_receipts"], remove: [] }]);
   expect(f.state.snapshot!.data.historyId).toBe("200");
 });
 
@@ -205,5 +206,37 @@ test("oversized classifier request is a terminal abstention, not a mailbox-block
   const f = fixture();
   f.deps.classify = async () => { throw new SafeError("ai_request_limit"); };
   await f.processor.notification(account, "200");
-  expect(f.gmail.modifications).toEqual([{ id: "a1", add: ["Label_done"], remove: [] }]);
+  expect(f.gmail.modifications).toEqual([]);
+  expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
+});
+
+test("private completion survives history replay without a visible processing label", async () => {
+  const f = fixture();
+  await f.processor.notification(account, "200");
+  expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_done");
+  f.gmail.pages = [{ historyId: "250", history: [{ id: "220", messagesAdded: [{ message: { id: "a1" } }] }] }];
+  await f.processor.notification(account, "250");
+  expect(f.count()).toBe(1);
+});
+
+test("legacy processed labels migrate into private completion without inference", async () => {
+  const f = fixture();
+  f.gmail.messages.get("a1")!.labelIds!.push("Label_done");
+  await f.processor.notification(account, "200");
+  expect(f.count()).toBe(0);
+  expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
+});
+
+test("private marker failures preserve the history cursor for retry", async () => {
+  const f = fixture();
+  const mark = f.state.markProcessed.bind(f.state);
+  f.state.markProcessed = async () => { throw new SafeError("storage_unavailable"); };
+  await expect(f.processor.notification(account, "200")).rejects.toThrow("storage_unavailable");
+  expect(f.state.snapshot!.data.historyId).toBe("100");
+  f.state.markProcessed = mark;
+  await f.processor.notification(account, "200");
+  expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
+  expect(f.state.snapshot!.data.historyId).toBe("200");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
 });

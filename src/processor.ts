@@ -4,6 +4,8 @@ import { errorCode, HttpError, log, SafeError } from "./errors.js";
 import { type GmailPort, type LabelMap, verifyMailbox } from "./gmail.js";
 import { MailboxSession, type StateStore } from "./state.js";
 import { extract, received, type EmailText } from "./text.js";
+import { senderOf } from "./sender.js";
+import type { Verification } from "./verification.js";
 
 // Deterministic per-message outcomes: retrying cannot succeed, so abstain instead of
 // blocking every later message in the mailbox.
@@ -17,6 +19,7 @@ export interface Dependencies {
   classify(account: Account, email: EmailText, signal: AbortSignal): Promise<Decision>;
   log?: typeof log;
   now?: () => number;
+  verification?: Verification;
 }
 
 export class Processor {
@@ -38,7 +41,15 @@ export class Processor {
       message = await gmail.message(id, "metadata");
       headerOnly = true;
     }
-    if (message.labelIds?.includes(labels.processed) || !received(message, account.email)) return;
+    if (!received(message, account.email)) return;
+    const resume = account.humanVerification &&
+      await this.deps.verification?.needsResume(account, message);
+    if (message.labelIds?.includes(labels.processed) && !resume) return;
+    if (account.humanVerification) {
+      if (!this.deps.verification) throw new SafeError("verification_not_configured");
+      if (await this.deps.verification.quarantine(account, message, gmail, labels, session)) return;
+      if (message.labelIds?.includes(labels.processed)) return;
+    }
     const email = await extract(message, attachmentId => gmail.attachment(id, attachmentId));
     if (headerOnly) Object.assign(email, { body: "", bodyUnavailable: true, truncated: true });
     let decision: Decision;
@@ -66,7 +77,12 @@ export class Processor {
     const current = await gmail.message(id, "minimal");
     if (current.labelIds?.includes(labels.processed)) return;
     if (current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT"].includes(l))) return;
-    const block = archiveBlock(decision, account, current.labelIds || []);
+    const sender = senderOf(message);
+    // Lookup errors retry; they never mean "not a contact". This guard also
+    // applies when human verification is disabled.
+    const protectedSender = !sender || sender === account.email || await gmail.hasContact(sender) ||
+      !!(account.humanVerification && await this.deps.verification?.trusted(account, sender));
+    const block = protectedSender ? "protected_sender" : archiveBlock(decision, account, current.labelIds || []);
     const add = [labels.processed];
     if (decision.label) {
       const selected = labels.options[decision.label];

@@ -42,8 +42,8 @@ async function main() {
             grant_type: "authorization_code", code, redirect_uri: redirect, code_verifier: verifier,
           }),
         }, { maxBytes: 16_384 }));
-        if (!token.scope.split(" ").includes("https://www.googleapis.com/auth/gmail.modify"))
-          throw new SafeError("gmail_scope_missing");
+        for (const scope of ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/contacts"])
+          if (!token.scope.split(" ").includes(scope)) throw new SafeError("google_scope_missing");
         const profile = z.object({ emailAddress: z.string().email() }).parse(await jsonRequest(
           "gmail", "https://gmail.googleapis.com/gmail/v1/users/me/profile",
           { headers: { Authorization: `Bearer ${token.access_token}` } },
@@ -82,7 +82,7 @@ async function main() {
       redirect = `http://127.0.0.1:${address.port}/callback`;
       const query = new URLSearchParams({
         client_id: clientId, redirect_uri: redirect, response_type: "code",
-        scope: "https://www.googleapis.com/auth/gmail.modify",
+        scope: "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/contacts",
         access_type: "offline", prompt: "consent", state,
         code_challenge: challenge, code_challenge_method: "S256",
       });

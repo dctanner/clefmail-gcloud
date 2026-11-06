@@ -6,3 +6,4 @@ dist
 config.json
 *.log
 tests
+.pi

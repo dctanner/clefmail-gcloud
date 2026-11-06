@@ -54,3 +54,48 @@ if (args.includes('describe')) process.exit(process.env.MODE === 'create' ? 1 : 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("verification deployment is a separate public service with no processor secrets or watches", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "clefmail-verify-deploy-test-"));
+  const trace = join(directory, "calls.jsonl");
+  try {
+    await writeFile(join(directory, "gcloud"), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2).filter(v => !v.startsWith('--project='));
+fs.appendFileSync(process.env.TRACE, JSON.stringify(args) + '\\n');
+if (args[0] === 'run' && args[1] === 'services' && args[2] === 'describe')
+  console.log('https://clefmail-test-verify.run.app');
+`, { mode: 0o755 });
+    await writeFile(join(directory, "bun"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const env = {
+      ...process.env, PATH: `${directory}:${process.env.PATH}`, TRACE: trace,
+      PROJECT: "clefmail-test", STATE_BUCKET: "clefmail-test-state", SERVICE: "clefmail-gcloud",
+      VERIFICATION_SECRET_BINDINGS: "/secrets/config.json=config:1,GOOGLE_CLIENT_ID=client-id:1,GOOGLE_CLIENT_SECRET=client-secret:1,TURNSTILE_SECRET_KEY=turnstile:1,GMAIL_PERSONAL_REFRESH_TOKEN=mail-token:2",
+    };
+    const result = spawnSync("bash", [resolve("scripts/deploy-verification.sh")], {
+      env, encoding: "utf8", timeout: 20_000,
+    });
+    expect(result.status).toBe(0);
+    const calls = (await readFile(trace, "utf8")).trim().split("\n").map(line => JSON.parse(line) as string[]);
+    const deploy = calls.find(c => c[0] === "run" && c[1] === "deploy")!;
+    expect(deploy[2]).toBe("clefmail-gcloud-verify");
+    expect(deploy).toContain("--allow-unauthenticated");
+    expect(deploy).toContain("--ingress=all");
+    expect(deploy).toContain("--set-env-vars=SERVICE_MODE=verification,CONFIG_PATH=/secrets/config.json,STATE_BUCKET=clefmail-test-state");
+    expect(calls.some(c => c[0] === "pubsub" || c[0] === "scheduler")).toBe(false);
+    expect(calls.some(c => c.some(arg => arg.includes("CLASSIFIER_API_KEY")))).toBe(false);
+    expect(calls.some(c => c[0] === "run" && c.includes("clefmail-gcloud"))).toBe(false);
+    for (const invalid of [
+      "TURNSTILE_SECRET_KEY=literal-secret",
+      `${env.VERIFICATION_SECRET_BINDINGS},NODE_OPTIONS=evil:1`,
+      `${env.VERIFICATION_SECRET_BINDINGS},TURNSTILE_SECRET_KEY=duplicate:2`,
+    ]) {
+      await rm(trace, { force: true });
+      const rejected = spawnSync("bash", [resolve("scripts/deploy-verification.sh")], {
+        env: { ...env, VERIFICATION_SECRET_BINDINGS: invalid }, encoding: "utf8",
+      });
+      expect(rejected.status).not.toBe(0);
+      await expect(readFile(trace)).rejects.toThrow();
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

@@ -9,6 +9,7 @@
       "email": "you@example.com",
       "refreshTokenEnv": "GMAIL_PERSONAL_REFRESH_TOKEN",
       "archiveEnabled": true,
+      "humanVerification": false,
       "prompt": "Choose the best label, or no_match if uncertain. Archive only routine messages that need no response, task, or inbox attention. Routine receipts and newsletters may be archived. Keep payment problems, direct requests, time-sensitive notices, and personal conversations in the inbox.",
       "labels": [
         {

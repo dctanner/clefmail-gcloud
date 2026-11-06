@@ -26,8 +26,9 @@ export const decision: Decision = {
   reason: null, bodyUnavailable: false, truncated: false,
 };
 export const message = (id = "a1", labels = ["INBOX"]): Message => ({
-  id, labelIds: labels,
-  payload: { mimeType: "text/plain", headers: [{ name: "To", value: account.email }],
+  id, labelIds: labels, internalDate: "1700000000000",
+  payload: { mimeType: "text/plain", headers: [{ name: "To", value: account.email },
+    { name: "From", value: "shop@example.com" }],
     body: { data: Buffer.from("Paid. No action needed.").toString("base64url"), size: 23 } },
 });
 
@@ -51,6 +52,9 @@ export class FakeGmail implements GmailPort {
   historyCalls: [string, string | undefined][] = [];
   messageCalls: [string, string][] = [];
   watchCalls = 0;
+  contacts = new Set<string>();
+  corresponded = false;
+  notices: { to: string; subject: string; body: string; key: string }[] = [];
   profileEmail = account.email;
   profileHistory = "300";
   pages: HistoryPage[] = [{ historyId: "200", history: [{ id: "150", messagesAdded: [{ message: { id: "a1" } }] }] }];
@@ -72,4 +76,11 @@ export class FakeGmail implements GmailPort {
     value.labelIds = [...new Set([...(value.labelIds || []).filter(l => !remove.includes(l)), ...add])];
   }
   async watch() { this.watchCalls++; return { historyId: "400", expiration: "9999999999999" }; }
+  async hasContact(email: string) { return this.contacts.has(email); }
+  async addContact(email: string) { this.contacts.add(email); }
+  async hasCorresponded() { return this.corresponded; }
+  async restore(id: string) { await this.modify(id, ["INBOX"], []); }
+  async sendNotice(to: string, subject: string, body: string, key: string) {
+    if (!this.notices.some(n => n.key === key)) this.notices.push({ to, subject, body, key });
+  }
 }

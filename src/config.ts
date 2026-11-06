@@ -17,6 +17,7 @@ export const accountSchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
   enabled: z.boolean().default(true),
   archiveEnabled: z.boolean().default(true),
+  humanVerification: z.boolean().default(false),
   probability: z.number().min(0.5).max(1).default(0.75),
   margin: z.number().min(0).max(1).default(0.15),
   archiveThreshold: z.number().min(0.5).max(1).default(0.95),
@@ -29,6 +30,14 @@ export const accountSchema = z.object({
 });
 
 export const configSchema = z.object({
+  verification: z.object({
+    publicUrl: z.string().url().refine(value => {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password &&
+        url.pathname === "/" && !url.search && !url.hash;
+    }, "Use an HTTPS origin without a path"),
+    siteKey: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/),
+  }).strict().optional(),
   provider: z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("clef"),
@@ -41,6 +50,8 @@ export const configSchema = z.object({
   ]),
   accounts: z.array(accountSchema).min(1).max(10),
 }).strict().superRefine((v, ctx) => {
+  if (v.accounts.some(a => a.humanVerification) && !v.verification)
+    ctx.addIssue({ code: "custom", message: "Human verification requires verification settings" });
   for (const key of ["id", "email", "refreshTokenEnv"] as const) {
     if (new Set(v.accounts.map(a => a[key])).size !== v.accounts.length)
       ctx.addIssue({ code: "custom", message: `Duplicate account ${key}` });

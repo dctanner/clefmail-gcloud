@@ -2,19 +2,24 @@ import { createServer } from "node:http";
 import { loadConfig, env } from "./config.js";
 import { errorCode, log } from "./errors.js";
 import { createHandler } from "./handler.js";
-import { createProcessor } from "./runtime.js";
+import { createProcessor, createVerification } from "./runtime.js";
+import { createVerificationHandler } from "./verification-handler.js";
 
 async function main() {
   const config = await loadConfig();
-  const subscription = env("PUBSUB_SUBSCRIPTION");
-  const topic = env("GMAIL_TOPIC");
-  if (!/^projects\/[^/]+\/subscriptions\/[^/]+$/.test(subscription) ||
-      !/^projects\/[^/]+\/topics\/[^/]+$/.test(topic))
+  const mode = process.env.SERVICE_MODE || "processor";
+  if (!["processor", "verification"].includes(mode)) throw new Error("Invalid service mode");
+  const subscription = mode === "processor" ? env("PUBSUB_SUBSCRIPTION") : "";
+  const topic = mode === "processor" ? env("GMAIL_TOPIC") : "";
+  if (mode === "processor" && (!/^projects\/[^/]+\/subscriptions\/[^/]+$/.test(subscription) ||
+      !/^projects\/[^/]+\/topics\/[^/]+$/.test(topic)))
     throw new Error("Invalid Pub/Sub resource names");
   for (const account of config.accounts.filter(a => a.enabled)) env(account.refreshTokenEnv);
   env("GOOGLE_CLIENT_ID");
   env("GOOGLE_CLIENT_SECRET");
-  const handler = createHandler(config, createProcessor(config), subscription, topic);
+  const handler = mode === "verification"
+    ? createVerificationHandler(config, createVerification(config), env("TURNSTILE_SECRET_KEY"))
+    : createHandler(config, createProcessor(config), subscription, topic);
   const server = createServer(async (req, res) => {
     try {
       let size = 0;
@@ -31,11 +36,14 @@ async function main() {
       const method = req.method || "GET";
       const request = new Request(new URL(req.url || "/", "http://localhost"), {
         method,
-        headers: { "content-type": req.headers["content-type"] || "" },
+        headers: { "content-type": req.headers["content-type"] || "", origin: req.headers.origin || "" },
         body: ["GET", "HEAD"].includes(method) ? undefined : Buffer.concat(chunks),
       });
       const response = await handler(request);
-      res.writeHead(response.status, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+      res.writeHead(response.status, {
+        "Content-Type": "text/plain", "Cache-Control": "no-store",
+        ...Object.fromEntries(response.headers),
+      });
       res.end(await response.text());
     } catch (error) {
       log("http_failed", { code: errorCode(error) });

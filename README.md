@@ -4,7 +4,9 @@
 
 Clefmail is a small, self-hosted TypeScript service. Gmail sends new-mail notifications to Google Cloud Run through Pub/Sub; Clefmail asks your chosen model for a category and an archive decision, then updates that individual message in Gmail. It supports up to ten mailboxes, each with its own labels and instructions.
 
-No dashboard, inbox polling, database server, browser extension, or historical inbox scan. Google Cloud Storage holds a tiny checkpoint/lease object per mailbox.
+No dashboard, inbox polling, database server, browser extension, or historical classification scan. Google Cloud Storage holds mailbox checkpoints/leases and optional sender-verification records.
+
+**Human verification:** optionally hold first-time unknown senders outside the inbox until they complete Cloudflare Turnstile. Successful verification restores held inbox messages, adds the sender to Google Contacts, and emails them confirmation. Existing contacts are protected from **all Clefmail archiving**, even with verification disabled. See [setup, migration, and safety details](docs/VERIFICATION.md).
 
 > **Status: experimental, not production-validated.** The implementation has synthetic tests, but has not been deployed or tested with a real mailbox, model endpoint, or Google Cloud project. Passing tests do not establish model accuracy or working cloud permissions.
 >
@@ -26,7 +28,7 @@ Cloud Storage          → per-mailbox history cursor and processing lease
 
 The first watch starts at Gmail's current history baseline: **existing mail is left alone**. Only newly added eligible incoming messages are classified. Read mail and mail already archived by a Gmail filter remain eligible; Spam, Trash, drafts and sent-only messages are skipped. Self-addressed mail is supported when recipient metadata identifies it as incoming.
 
-Gmail push payloads contain a mailbox address and history ID, not a message ID. The service reads the intervening history changes but never searches the inbox or calls `messages.list`. Its own label changes do not trigger classification.
+Gmail push payloads contain a mailbox address and history ID, not a message ID. The service reads the intervening history changes. With human verification enabled it also searches retained incoming/sent **metadata** for prior correspondence and Sent mail for notice deduplication; it never classifies historical mail. Its own label changes do not trigger classification.
 
 ## Before you start
 
@@ -99,7 +101,8 @@ Other optional account settings:
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Whether to process and renew watches for this mailbox |
-| `archiveEnabled` | `true` | Allow eligible messages to leave the inbox |
+| `archiveEnabled` | `true` | Allow the AI classifier to archive eligible messages (contacts are always protected) |
+| `humanVerification` | `false` | Independently quarantine new unknown senders until verified; requires verification service configuration |
 | `probability` | `0.75` | Minimum category probability |
 | `margin` | `0.15` | Minimum margin over the runner-up category |
 | `archiveThreshold` | `0.95` | Minimum archive probability |
@@ -109,10 +112,10 @@ These thresholds are starting points, **not accuracy guarantees**. Each account 
 ## 3. Create Google OAuth credentials
 
 1. Open your project in [Google Cloud Console](https://console.cloud.google.com/).
-2. Under **APIs & Services → Library**, enable the **Gmail API**.
+2. Under **APIs & Services → Library**, enable the **Gmail API** and **People API**.
 3. Open **Google Auth Platform** (or the OAuth consent screen). Configure app branding/contact details and the appropriate audience. A personal Gmail account normally requires an external audience; internal apps are limited to an eligible Workspace organization.
 4. If the app is in **Testing**, add your mailbox under test users.
-5. Configure the Gmail scope `https://www.googleapis.com/auth/gmail.modify` under data access.
+5. Configure `https://www.googleapis.com/auth/gmail.modify` and `https://www.googleapis.com/auth/contacts` under data access. Contacts access is required even when human verification is disabled, so the AI archiver can protect existing contacts. Existing installations must reauthorize and publish a new token version before upgrading.
 6. Create an OAuth client with application type **Desktop app**. The helper uses a dynamic loopback callback; do not create a Web application client for this walkthrough.
 7. Privately copy the client ID and client secret into `.env` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Keep `CONFIG_PATH=./config.json`.
 
@@ -128,7 +131,7 @@ Run this **on the computer where you will open the browser**:
 bun run authorize personal
 ```
 
-Open the printed Google URL, select the configured mailbox, and approve the requested scope. Do not share the authorization URL. The helper checks OAuth state, PKCE, mailbox identity and scope, then saves the refresh token to `.secrets/personal.token` with owner-only permissions. It does not print the token and will not overwrite an existing file.
+Open the printed Google URL, select the configured mailbox, and approve both requested scopes. Do not share the authorization URL. The helper checks OAuth state, PKCE, mailbox identity and scope, then saves the refresh token to `.secrets/personal.token` with owner-only permissions. It does not print the token and will not overwrite an existing file.
 
 Load the token into your current Bash session and create missing labels:
 
@@ -160,7 +163,7 @@ export REGION=us-central1
 export STATE_BUCKET=your-project-clefmail-state
 
 gcloud --project="$PROJECT" services enable \
-  secretmanager.googleapis.com gmail.googleapis.com
+  secretmanager.googleapis.com gmail.googleapis.com people.googleapis.com
 ```
 
 Production reads a pinned copy of `config.json` from Secret Manager. It does not read your local `.env`.
@@ -215,7 +218,7 @@ bash scripts/deploy.sh
 
 Cloud Build permissions and organization policies may require administrator setup. The script does not configure billing alerts or notification channels. A failed deployment can leave partially created resources; inspect the failure before retrying.
 
-Do **not** grant `allUsers` or `allAuthenticatedUsers` access or put an unauthenticated proxy in front of the service. Both trusted invoker identities can invoke both POST routes; there is no separate application login. The Cloud Run URL is not a dashboard and direct internet requests should be rejected.
+Do **not** grant `allUsers` or `allAuthenticatedUsers` access or put an unauthenticated proxy in front of the **processor** service. Human verification uses a separately deployed public service in `SERVICE_MODE=verification`, which has no `/pubsub` or `/renew` routes; see [the verification guide](docs/VERIFICATION.md). Both trusted invoker identities can invoke both POST routes; there is no separate application login. The Cloud Run URL is not a dashboard and direct internet requests should be rejected.
 
 ## 7. Verify before trusting it
 
@@ -240,7 +243,7 @@ Only after evaluating representative samples should you set `archiveEnabled: tru
 ### Change policy, pause, or add another mailbox
 
 - **Policy/labels:** edit `config.json`, run `bun run setup` if new labels are needed, upload a new config secret version, update `SECRET_BINDINGS`, and redeploy. Already processed messages are not automatically reclassified. Prefer changes while idle to avoid old-policy decisions already in flight.
-- **Stop archiving:** set `archiveEnabled: false` and redeploy the new config version. Labeling continues.
+- **Stop archiving:** set `archiveEnabled: false` and `humanVerification: false` and redeploy the new config version. Labeling continues. Disabling verification does not automatically restore held mail; see the verification guide for how to drain it first.
 - **Pause a mailbox:** set `enabled: false` and redeploy. This is not an instantaneous cancellation of an already running request.
 - **Add a mailbox:** add a unique account ID, actual mailbox address and `GMAIL_..._REFRESH_TOKEN` environment name. Authorize it with `bun run authorize <id>`, export that token, and run setup. Create a separate token secret, add its binding, upload the revised config and redeploy. Add it as an OAuth test user if necessary. All mailboxes share the selected model provider.
 - **Reconnect:** move the old `.secrets/<id>.token` aside privately before rerunning authorization. Publish a new token secret version and update its binding. Do not commit either token file.
@@ -267,11 +270,11 @@ Disable processing and revoke Gmail grants first. Then remove the dedicated Sche
 
 ## Safety, privacy and deliberate limits
 
-- **Message-level only:** the service adds a category plus `Clefmail/Processed` and may remove `INBOX` in one modification. It never sends, deletes, trashes, marks read, or modifies a whole thread. Unread status and unrelated labels are preserved. It does not move already archived mail back into the inbox.
-- **Archive guardrails:** a usable, untruncated plain-text body and valid confident category are required. Freshly checked starred, important, Spam, Trash and draft messages cannot be archived. Header-only classification requires at least 0.90 probability and cannot archive. Invalid archive output means label-only; invalid/abstaining category decisions receive only the processing marker.
+- **Message-level only:** classification adds a category plus `Clefmail/Processed` and may remove `INBOX`. Optional verification sends challenge/confirmation emails, creates contacts, and restores only messages recorded as having been in the inbox before quarantine. It never deletes, trashes, marks read, or modifies a whole thread. Unread status and unrelated labels are preserved.
+- **AI archive guardrails:** contacts, the mailbox's own address, and ambiguous/missing senders are protected. Contacts API failures retry instead of permitting an archive. A usable, untruncated plain-text body and valid confident category are required. Freshly checked starred, important, Spam, Trash and draft messages cannot be archived. Header-only classification requires at least 0.90 probability and cannot archive. Invalid archive output means label-only; invalid/abstaining category decisions receive only the processing marker. Opt-in human-verification quarantine is independent of these AI thresholds and starred/important protection; Spam, Trash and drafts remain excluded.
 - **Text only:** no attachments, HTML conversion, external images, linked-page fetching or conversation history. Email text exists in request memory and goes to the selected provider. Logs contain opaque message/account IDs and outcome codes, not subjects or bodies.
-- **Minimal persistent state:** Secret Manager holds credentials/configuration, Pub/Sub holds mailbox/history metadata, Storage holds history cursors/watch expiry/leases, and Gmail holds processing markers. There is no per-message decision journal, statistics database or usage ledger.
-- **At-least-once, not exactly-once:** crashes can repeat inference and its cost. Processing markers usually prevent repeated completed work. Removing those markers can permit reprocessing if history is replayed.
+- **Persistent state:** Secret Manager holds credentials/configuration, Pub/Sub holds mailbox/history metadata, Storage holds cursors/watch expiry/leases and optional sender records (email address, secret verification capability, pending message IDs and completion state), and Gmail holds processing markers. Treat the private bucket as sensitive mailbox data; there is no automatic sender-record expiration or deletion.
+- **At-least-once, not exactly-once:** crashes can repeat inference and its cost. Processing markers usually prevent repeated completed work. Verification also journals pending messages and completion stages; deterministic Message-IDs and Sent searches reduce duplicate notices, but Gmail send/contact creation is not transactional and ambiguous failures can still duplicate external effects. Removing those markers can permit reprocessing if history is replayed.
 - **No historical recovery:** an expired history cursor is reset to the current baseline; missed mail is not recovered. A failed message can delay subsequent history until retry; notifications can eventually dead-letter. No automatic dead-letter replay, inbox scan, reconciliation job or backfill is provided.
 - **Concurrent edits:** Gmail offers no conditional label transaction. A small race with your manual Gmail changes remains unavoidable.
 - **Provider policies:** review the selected model provider's retention/processing terms and Google's Limited Use requirements. No blanket zero-retention, compliance or accuracy claim is made.
@@ -292,7 +295,8 @@ bun run check:full  # all three
 | `src/classifier.ts`, `src/decision.ts` | Clef/Jev adapters, validation and archive policy |
 | `src/gmail.ts`, `src/text.ts` | Gmail API access and bounded MIME/text extraction |
 | `src/processor.ts`, `src/state.ts` | History processing, watch renewal and storage leases |
-| `src/handler.ts`, `src/server.ts` | Pub/Sub and renewal HTTP endpoints |
+| `src/handler.ts`, `src/server.ts` | Private Pub/Sub/renewal endpoints and isolated public service mode |
+| `src/verification.ts`, `src/verification-handler.ts`, `src/sender.ts` | Sender quarantine state, Turnstile page/validation, completion and sender parsing |
 | `scripts/` | OAuth, label setup, sample preview and explicit deployment |
 | `tests/` | Synthetic provider, processing, storage and deployment tests |
 

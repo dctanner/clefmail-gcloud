@@ -33,7 +33,7 @@ g() { gcloud --project="$PROJECT" "$@"; }
 bun run check:full
 g services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com \
   pubsub.googleapis.com cloudscheduler.googleapis.com secretmanager.googleapis.com \
-  storage.googleapis.com gmail.googleapis.com iamcredentials.googleapis.com
+  storage.googleapis.com gmail.googleapis.com people.googleapis.com iamcredentials.googleapis.com
 
 for name in "${SERVICE}-runtime" "${SERVICE}-invoke"; do
   g iam service-accounts describe "${name}@${PROJECT}.iam.gserviceaccount.com" >/dev/null 2>&1 ||
@@ -66,7 +66,7 @@ g pubsub topics add-iam-policy-binding "$SERVICE" \
 g run deploy "$SERVICE" --source=. --region="$REGION" --service-account="$RUNTIME" \
   --no-allow-unauthenticated --ingress=internal --min-instances=0 --max-instances=1 \
   --concurrency=1 --timeout=300 --memory=512Mi --cpu=1 --port=8080 \
-  --set-env-vars="CONFIG_PATH=/secrets/config.json,STATE_BUCKET=${STATE_BUCKET},GMAIL_TOPIC=${TOPIC},PUBSUB_SUBSCRIPTION=${SUBSCRIPTION}" \
+  --set-env-vars="SERVICE_MODE=processor,CONFIG_PATH=/secrets/config.json,STATE_BUCKET=${STATE_BUCKET},GMAIL_TOPIC=${TOPIC},PUBSUB_SUBSCRIPTION=${SUBSCRIPTION}" \
   --set-secrets="$SECRET_BINDINGS" --quiet
 URL="$(g run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
 g run services add-iam-policy-binding "$SERVICE" --region="$REGION" \

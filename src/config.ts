@@ -21,7 +21,7 @@ export const accountSchema = z.object({
   humanVerification: z.boolean().default(true),
   humanVerificationTest: z.boolean().default(false),
   probability: z.number().min(0.5).max(1).default(0.75),
-  margin: z.number().min(0).max(1).default(0.15),
+  verificationThreshold: z.number().min(0.5).max(1).default(0.75),
   archiveThreshold: z.number().min(0.5).max(1).default(0.95),
   labels: z.array(optionSchema).min(1).max(20),
 }).strict().superRefine((v, ctx) => {

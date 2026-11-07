@@ -47,7 +47,7 @@ test("category validation rejects invented choices and invalid probabilities", (
     (r:any)=>r.answers.label.probabilities={receipts:.1,no_match:.9},
   ]) {const raw=answer();mutate(raw);expect(()=>decide(raw,account,email)).toThrow();}
   expect(decide(answer(.7),account,email).label).toBeNull();
-  expect(decide(answer(.85),account,{...email,bodyUnavailable:true}).label).toBeNull();
+  expect(decide(answer(.85),account,email).label).toBe("receipts");
 });
 
 test("configuration rejects duplicate accounts and unsafe category IDs", () => {
@@ -68,4 +68,10 @@ test("trusted sender facts remove verification from the model's allowed actions"
     expect(() => decide(answer(), account, trustedEmail)).toThrow("invalid_action_answer");
   }
   expect(Object.keys(request(account, { ...email, senderContext: { ...facts, sentToSameCustomDomain: true, verificationTest: true } }, "clef").questions.action.criteria)).toContain("verify");
+});
+
+
+test("model requests require a complete readable body", () => {
+  for (const patch of [{body: ""}, {body: "   "}, {bodyUnavailable: true}, {truncated: true}])
+    expect(() => request(account, {...email,...patch}, "clef")).toThrow("unreadable_body");
 });

@@ -500,3 +500,38 @@ test("new company trust releases a resumed hold without sending another email", 
   expect(f.gmail.notices).toHaveLength(1);
   expect(f.gmail.contacts.size).toBe(0);
 });
+
+test("unreadable and incomplete bodies cause no classification, hold, or notice", async () => {
+  for (const body of [undefined, {data: "!!!"}, {data: Buffer.from(" ").toString("base64url")},
+    {data: Buffer.from("x".repeat(41000)).toString("base64url")}]) {
+    const f = fixture();
+    f.gmail.messages.get("a1")!.payload!.body = body;
+    await f.processor.notification(protectedAccount, "200");
+    expect(f.classified()).toBe(0);
+    expect(f.gmail.modifications).toHaveLength(0);
+    expect(f.gmail.notices).toHaveLength(0);
+    expect(f.senders.values.size).toBe(0);
+    expect(f.state.snapshot!.data.historyId).toBe("200");
+  }
+});
+
+test("a resumed verification attempt also requires a readable body", async () => {
+  const f = fixture();
+  await f.processor.notification(protectedAccount, "200");
+  const modifications = f.gmail.modifications.length;
+  f.gmail.messages.get("a1")!.payload!.body = undefined;
+  f.gmail.pages = [{historyId:"250",history:[{id:"250",messagesAdded:[{message:{id:"a1"}}]}]}];
+  await f.processor.notification(protectedAccount,"250");
+  expect(f.gmail.modifications).toHaveLength(modifications);
+  expect(f.classified()).toBe(1);
+  expect(f.gmail.notices).toHaveLength(1);
+});
+
+test("verification requires its minimum score while lower scores keep mail in the inbox", async () => {
+  for (const score of [.7499,.75]) {
+    const f=fixture(async()=>({...decision,archive:false,action:"verify" as const,actionProbability:score}));
+    await f.processor.notification(protectedAccount,"200");
+    expect(f.gmail.notices.length).toBe(score>=.75?1:0);
+    expect(f.gmail.messages.get("a1")!.labelIds!.includes("INBOX")).toBe(score<.75);
+  }
+});

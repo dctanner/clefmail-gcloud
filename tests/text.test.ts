@@ -35,12 +35,12 @@ test("legitimate plain body via attachment ID is supported", async () => {
 });
 
 test("caps Unicode characters and UTF-8 bytes without splitting code points", async () => {
-  expect(clip("😀".repeat(10_000)).length).toBe(12_288); // 6144 four-byte code points
-  const m = message(); m.payload!.body = { data: Buffer.from("a".repeat(13_000)).toString("base64url") };
+  expect(clip("😀".repeat(10_000)).length).toBe(20_000); // All 10,000 four-byte code points fit.
+  const m = message(); m.payload!.body = { data: Buffer.from("a".repeat(41_000)).toString("base64url") };
   expect(await extract(m, async () => ({ data: "" }))).toMatchObject({ truncated: true, bodyUnavailable: false });
 });
 
-test("malformed/oversized body is conservative header-only", async () => {
+test("malformed or oversized bodies are marked unreadable", async () => {
   for (const body of [{ data: "!!!" }, { size: 300_000, data: "aGVsbG8" }]) {
     const m = message(); m.payload!.body = body;
     expect(await extract(m, async () => ({ data: "" }))).toMatchObject({ truncated: true, bodyUnavailable: true });
@@ -54,16 +54,32 @@ test("received mail includes read/archived and self-send, excludes sent-only/spa
   expect(received(message("a", ["SENT"]), "someone-else@example.com")).toBe(false);
 });
 
-test("plain alternative is preferred even when HTML occurs first", async () => {
+test("HTML alternatives provide readable text when the plain alternative is a stub", async () => {
   const m=message();m.payload={mimeType:"multipart/alternative",parts:[
-    {mimeType:"text/html",body:{attachmentId:"html"}},
-    {mimeType:"text/plain",body:{data:Buffer.from("plain body").toString("base64url")}},
+    {mimeType:"text/plain",body:{data:Buffer.from("View this message in a browser").toString("base64url")}},
+    {mimeType:"text/html",body:{data:Buffer.from("<html><head><style>body{color:red}</style></head><body><p>Your documents have been received.</p></body></html>").toString("base64url")}},
   ]};
-  expect((await extract(m,async()=>{throw new Error("HTML must not be fetched");})).body).toBe("plain body");
+  const text=await extract(m,async()=>{throw new Error("Unexpected fetch");});
+  expect(text.body).toBe("Your documents have been received.");
+  expect(text.bodyUnavailable).toBe(false);
+});
+
+test("HTML documents mislabeled as plain text are converted", async () => {
+  const m=message();m.payload!.body={data:Buffer.from("<!DOCTYPE html><html><body><p>Your request is complete.</p></body></html>").toString("base64url")};
+  expect((await extract(m,async()=>({data:""}))).body).toBe("Your request is complete.");
 });
 
 test("deep HTML conversion is marked truncated", async () => {
   const m=message();m.payload!.mimeType="text/html";
-  m.payload!.body={data:Buffer.from("<div>".repeat(100)+"hidden deep content"+"</div>".repeat(100)).toString("base64url")};
+  m.payload!.body={data:Buffer.from("<div>".repeat(250)+"hidden deep content"+"</div>".repeat(250)).toString("base64url")};
   expect((await extract(m,async()=>({data:""}))).truncated).toBe(true);
+});
+
+
+test("formatted HTML fragments in plain MIME parts become text", async () => {
+  const m=message();m.payload!.body={data:Buffer.from('Your request is <b>received</b>. Read <a href="https://example.com/help">help</a>.').toString("base64url")};
+  const text=await extract(m,async()=>({data:""}));
+  expect(text.body).toContain("Your request is received.");
+  expect(text.body).not.toContain("<b>");
+  expect(text.body).not.toContain("<a");
 });

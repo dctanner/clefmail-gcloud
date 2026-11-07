@@ -29,7 +29,7 @@ export interface EmailText {
 const HTML_LIMIT = "[CLEFMAIL_HTML_LIMIT]";
 const htmlText = compile({
   wordwrap: false,
-  limits: { maxInputLength: 524288, maxDepth: 60, maxChildNodes: 10000, ellipsis: HTML_LIMIT },
+  limits: { maxInputLength: 524288, maxDepth: 200, maxChildNodes: 10000, ellipsis: HTML_LIMIT },
   selectors: ["script", "style", "head", "img", "iframe", "object", "form", "[hidden]", '[aria-hidden="true"]'].map(selector => ({ selector, format: "skip" })),
 });
 const encoder = new TextEncoder();
@@ -42,7 +42,7 @@ const header = (part: Part | undefined, name: string) =>
     ?.value || "";
 const clean = (s: string) =>
   s.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
-export function clip(s: string, chars = 12000, bytes = 24576) {
+export function clip(s: string, chars = 40000, bytes = 49152) {
   let result = "",
     n = 0,
     b = 0;
@@ -138,20 +138,24 @@ export async function extract(
       "utf-8";
     try {
       const text = new TextDecoder(charset, { fatal: true, ignoreBOM: false }).decode(raw);
-      return clean(wanted === "text/html" ? htmlText(text) : text);
+      const isHtml = wanted === "text/html" || /^\s*(?:<!doctype\s+html\b|<html\b)/i.test(text) ||
+        /<(html|body|p|div|table|a|b|strong|em|span)\b[^>]*>[\s\S]*<\/\1\s*>/i.test(text);
+      return clean(isHtml ? htmlText(text) : text);
     } catch {
       throw new SafeError("body_charset");
     }
   }
   try {
-    let full = m.payload ? await walk(m.payload, 0, "text/plain") : "";
-    if (!full.trim() && m.payload) full = await walk(m.payload, 0, "text/html");
+    // HTML alternatives often contain the actual message while plain alternatives
+    // contain browser-view stubs, CSS, or raw markup. Convert the HTML to text.
+    let full = m.payload ? await walk(m.payload, 0, "text/html") : "";
+    if (!full.trim() && m.payload) full = await walk(m.payload, 0, "text/plain");
     result.body = clip(full);
     result.truncated = result.body !== full || full.includes(HTML_LIMIT);
     result.bodyUnavailable = !result.body.trim();
   } catch (e) {
-    // Only content limits degrade to header-only. Transient Gmail/network failures
-    // (HttpError, *_request_failed, aborts) must be retried, not permanently marked.
+    // Content failures make the message ineligible for processing. Transient
+    // Gmail/network failures retry before any Gmail action.
     if (!(e instanceof SafeError) || !CONTENT_ERRORS.has(e.code)) throw e;
     result.body = "";
     result.bodyUnavailable = true;

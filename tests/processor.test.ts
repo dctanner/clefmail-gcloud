@@ -190,7 +190,7 @@ test("transient attachment-body failure is retried, never marked processed heade
   expect(f.state.snapshot!.data.historyId).toBe("100");
 });
 
-test("oversized message falls back to label-only header metadata instead of blocking", async () => {
+test("oversized messages skip all classification and Gmail actions", async () => {
   const f = fixture();
   const original = f.gmail.message.bind(f.gmail);
   f.gmail.message = async (id, format) => {
@@ -198,7 +198,9 @@ test("oversized message falls back to label-only header metadata instead of bloc
     return original(id, format);
   };
   await f.processor.notification(account, "200");
-  expect(f.gmail.modifications).toEqual([{ id: "a1", add: ["Label_receipts"], remove: [] }]);
+  expect(f.gmail.modifications).toEqual([]);
+  expect(f.count()).toBe(0);
+  expect(f.gmail.messageCalls).toEqual([]);
   expect(f.state.snapshot!.data.historyId).toBe("200");
 });
 

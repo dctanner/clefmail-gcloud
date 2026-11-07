@@ -25,9 +25,20 @@
         {
           "id": "newsletters",
           "name": "Clefmail/Newsletters",
-          "description": "Subscriptions and informational newsletters."
+          "description": "Editorial newsletters, articles, digests, and subscribed reading material."
+        },
+        {
+          "id": "notifications",
+          "name": "Clefmail/Notifications",
+          "description": "Automated account, delivery, security, system, and support status updates, confirmations, and login codes."
+        },
+        {
+          "id": "promotions",
+          "name": "Clefmail/Promotions",
+          "description": "Marketing campaigns, retail offers, discounts, sales pitches, product promotions, and event advertising."
         }
-      ]
+      ],
+      "verificationThreshold": 0.75
     }
   ],
   "verification": {

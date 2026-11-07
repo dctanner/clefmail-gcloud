@@ -31,15 +31,13 @@ export class Processor {
     session: MailboxSession, signal: AbortSignal,
   ): Promise<void> {
     signal.throwIfAborted();
-    let message, headerOnly = false;
+    let message;
     try {
       message = await gmail.message(id);
     } catch (error) {
-      // A very large inline body must not block the mailbox forever. Fall back to
-      // headers only: header-only messages can be labeled but never archived.
       if (!(error instanceof SafeError) || error.code !== "gmail_response_limit") throw error;
-      message = await gmail.message(id, "metadata");
-      headerOnly = true;
+      this.log("message_skipped", { account: account.id, message: id, reason: "body_response_limit" });
+      return;
     }
     if (!received(message, account.email)) return;
     const verify = account.humanVerification || isVerificationTest(account, message);
@@ -48,13 +46,16 @@ export class Processor {
     const processed = message.labelIds?.includes(labels.processed) || await this.deps.state.isProcessed(account.id, id);
     if (processed && !resume) return;
     if (verify && !this.deps.verification) throw new SafeError("verification_not_configured");
+    const email = await extract(message, attachmentId => gmail.attachment(id, attachmentId));
+    if (email.bodyUnavailable || email.truncated || !email.body.trim()) {
+      this.log("message_skipped", { account: account.id, message: id, reason: email.truncated ? "incomplete_body" : "unreadable_body" });
+      return;
+    }
     if (resume) {
       if (!this.deps.verification) throw new SafeError("verification_not_configured");
       if (await this.deps.verification.quarantine(account, message, gmail, labels, session)) return;
       if (processed) return;
     }
-    const email = await extract(message, attachmentId => gmail.attachment(id, attachmentId));
-    if (headerOnly) Object.assign(email, { body: "", bodyUnavailable: true, truncated: true });
     email.senderContext = await this.deps.verification?.describeSender(account, message, gmail);
     let decision: Decision;
     try {
@@ -65,12 +66,8 @@ export class Processor {
       if (!(error instanceof SafeError) || error instanceof HttpError ||
           !TERMINAL_CLASSIFIER_ERRORS.includes(error.code))
         throw error;
-      const code = error.code;
-      decision = {
-        label: null, archive: false, archiveProbability: null, archiveError: code,
-        action: "verify", actionProbability: null,
-        reason: code, bodyUnavailable: email.bodyUnavailable, truncated: email.truncated,
-      };
+      this.log("message_skipped", { account: account.id, message: id, reason: error.code });
+      return;
     }
     // Archive gates come from the extracted email itself, never from the classifier path.
     decision = {
@@ -88,7 +85,8 @@ export class Processor {
     const protectedSender = !sender || sender === account.email || (email.senderContext?.contact ?? await gmail.hasContact(sender)) ||
       !!(account.humanVerification && email.senderContext?.verified);
     const block = protectedSender ? "protected_sender" : archiveBlock(decision, account, current.labelIds || []);
-    const modelBypass = decision.action !== "verify" && !isVerificationTest(account, message);
+    const modelBypass = !isVerificationTest(account, message) && (decision.action !== "verify" ||
+      (decision.actionProbability ?? 0) < account.verificationThreshold);
     const checkSender = verify && !modelBypass && block !== null && !!current.labelIds?.includes("INBOX");
     this.log("message_classified", {
       account: account.id, message: id, label: decision.label, archiveProbability: decision.archiveProbability,

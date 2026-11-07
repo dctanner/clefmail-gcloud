@@ -23,6 +23,7 @@ export const answer = (p = 0.99, archive: unknown = 0.99) => ({
   },
 });
 export const decision: Decision = {
+  skipHumanVerification: false, verificationSkipProbability: null,
   label: "receipts", archive: true, archiveProbability: 0.99, archiveError: null,
   reason: null, bodyUnavailable: false, truncated: false,
 };

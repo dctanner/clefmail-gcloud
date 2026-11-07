@@ -15,11 +15,15 @@ test("extracts body text, not HTML, snippets, attachments, or attached messages"
   expect(text.bodyUnavailable).toBe(false);
 });
 
-test("HTML only is header-only, never an archive-eligible fallback", async () => {
+test("HTML-only body is converted to text without fetching external resources", async () => {
   const m = message(); m.payload!.mimeType = "text/html";
-  const text = await extract(m, async () => ({ data: "" }));
-  expect(text.bodyUnavailable).toBe(true);
-  expect(text.body).toBe("");
+  m.payload!.body = { data: Buffer.from('<p>Your code is <b>123456</b> &amp; expires soon.</p><script>bad()</script><img src="https://example.com/track"><p hidden>hidden</p>').toString('base64url') };
+  const text = await extract(m, async () => { throw new Error("Unexpected fetch"); });
+  expect(text.bodyUnavailable).toBe(false);
+  expect(text.body).toContain("Your code is 123456 & expires soon.");
+  expect(text.body).not.toContain("bad");
+  expect(text.body).not.toContain("hidden");
+  expect(text.body).not.toContain("track");
 });
 
 test("legitimate plain body via attachment ID is supported", async () => {
@@ -48,4 +52,18 @@ test("received mail includes read/archived and self-send, excludes sent-only/spa
   expect(received(message("a", ["SPAM"]), "owner@example.com")).toBe(false);
   expect(received(message("a", ["SENT"]), "owner@example.com")).toBe(true);
   expect(received(message("a", ["SENT"]), "someone-else@example.com")).toBe(false);
+});
+
+test("plain alternative is preferred even when HTML occurs first", async () => {
+  const m=message();m.payload={mimeType:"multipart/alternative",parts:[
+    {mimeType:"text/html",body:{attachmentId:"html"}},
+    {mimeType:"text/plain",body:{data:Buffer.from("plain body").toString("base64url")}},
+  ]};
+  expect((await extract(m,async()=>{throw new Error("HTML must not be fetched");})).body).toBe("plain body");
+});
+
+test("deep HTML conversion is marked truncated", async () => {
+  const m=message();m.payload!.mimeType="text/html";
+  m.payload!.body={data:Buffer.from("<div>".repeat(100)+"hidden deep content"+"</div>".repeat(100)).toString("base64url")};
+  expect((await extract(m,async()=>({data:""}))).truncated).toBe(true);
 });

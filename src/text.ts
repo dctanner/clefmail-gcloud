@@ -1,4 +1,5 @@
 // Bounded plain-text extractor adapted from the sibling clefmail implementation.
+import { compile } from "html-to-text";
 import { SafeError } from "./errors.js";
 export interface Message {
   id?: string;
@@ -23,10 +24,16 @@ export interface EmailText {
   bodyUnavailable: boolean;
   originalBytes: number;
 }
+const HTML_LIMIT = "[CLEFMAIL_HTML_LIMIT]";
+const htmlText = compile({
+  wordwrap: false,
+  limits: { maxInputLength: 524288, maxDepth: 60, maxChildNodes: 10000, ellipsis: HTML_LIMIT },
+  selectors: ["script", "style", "head", "img", "iframe", "object", "form", "[hidden]", '[aria-hidden="true"]'].map(selector => ({ selector, format: "skip" })),
+});
 const encoder = new TextEncoder();
 const CONTENT_ERRORS = new Set([
   "mime_limit", "body_limit", "body_fetch_limit", "body_encoding", "decoded_limit", "body_charset",
-  "gmail_response_limit",
+  "gmail_response_limit", "body_html",
 ]);
 const header = (part: Part | undefined, name: string) =>
   part?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())
@@ -81,7 +88,7 @@ export async function extract(
     decoded = 0,
     fetches = 0;
   const start = Date.now();
-  async function walk(p: Part, depth: number): Promise<string> {
+  async function walk(p: Part, depth: number, wanted: "text/plain" | "text/html"): Promise<string> {
     if (++parts > 100 || depth > 12 || Date.now() - start > 10000)
       throw new SafeError("mime_limit");
     if (
@@ -94,13 +101,13 @@ export async function extract(
     if (mime?.startsWith("multipart/")) {
       let texts: string[] = [];
       for (const part of p.parts || []) {
-        const t = await walk(part, depth + 1);
+        const t = await walk(part, depth + 1, wanted);
         if (t) texts.push(t);
         if (mime === "multipart/alternative" && t) break;
       }
       return texts.join("\n");
     }
-    if (mime !== "text/plain") return "";
+    if (mime !== wanted) return "";
     if ((p.body?.size || 0) > 262144) throw new SafeError("body_limit");
     let data = p.body?.data;
     if (!data && p.body?.attachmentId) {
@@ -128,17 +135,17 @@ export async function extract(
       /charset\s*=\s*["']?([^\s;"']+)/i.exec(header(p, "Content-Type"))?.[1] ||
       "utf-8";
     try {
-      return clean(
-        new TextDecoder(charset, { fatal: true, ignoreBOM: false }).decode(raw),
-      );
+      const text = new TextDecoder(charset, { fatal: true, ignoreBOM: false }).decode(raw);
+      return clean(wanted === "text/html" ? htmlText(text) : text);
     } catch {
       throw new SafeError("body_charset");
     }
   }
   try {
-    const full = m.payload ? await walk(m.payload, 0) : "";
+    let full = m.payload ? await walk(m.payload, 0, "text/plain") : "";
+    if (!full.trim() && m.payload) full = await walk(m.payload, 0, "text/html");
     result.body = clip(full);
-    result.truncated = result.body !== full;
+    result.truncated = result.body !== full || full.includes(HTML_LIMIT);
     result.bodyUnavailable = !result.body.trim();
   } catch (e) {
     // Only content limits degrade to header-only. Transient Gmail/network failures

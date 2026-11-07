@@ -67,6 +67,7 @@ export class Processor {
       const code = error.code;
       decision = {
         label: null, archive: false, archiveProbability: null, archiveError: code,
+        skipHumanVerification: false, verificationSkipProbability: null,
         reason: code, bodyUnavailable: email.bodyUnavailable, truncated: email.truncated,
       };
     }
@@ -86,7 +87,13 @@ export class Processor {
     const protectedSender = !sender || sender === account.email || await gmail.hasContact(sender) ||
       !!(account.humanVerification && await this.deps.verification?.trusted(account, sender));
     const block = protectedSender ? "protected_sender" : archiveBlock(decision, account, current.labelIds || []);
-    const checkSender = verify && block !== null && !!current.labelIds?.includes("INBOX");
+    const modelBypass = decision.skipHumanVerification && !decision.bodyUnavailable && !decision.truncated && !isVerificationTest(account, message);
+    const checkSender = verify && !modelBypass && block !== null && !!current.labelIds?.includes("INBOX");
+    this.log("message_classified", {
+      account: account.id, message: id, label: decision.label, archiveProbability: decision.archiveProbability,
+      archiveBlock: block, verificationSkipProbability: decision.verificationSkipProbability,
+      verificationPolicy: block === null ? "archived" : modelBypass ? "expected_mail" : checkSender ? "sender_checks" : "not_required",
+    });
     const add: string[] = [];
     if (decision.label) {
       const selected = labels.options[decision.label];

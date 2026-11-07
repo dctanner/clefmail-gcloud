@@ -63,3 +63,21 @@ describe("classification and archive policy", () => {
     expect(() => configSchema.parse({ ...config, accounts: [{ ...account, labels: [{ ...account.labels[0], id: "no_match" }] }] })).toThrow();
   });
 });
+
+test("verification bypass is independent of category and archive answers", () => {
+  const raw: any = answer(0.01, 0.1);
+  raw.answers.label.choice = "no_match";
+  raw.answers.skipHumanVerification = { type: "noul", noul: 0.97 };
+  expect(decide(raw, account, email)).toMatchObject({ label: null, archive: false, skipHumanVerification: true });
+});
+
+test("verification bypass requires valid confidence and complete body", () => {
+  for (const value of [undefined, null, "true", NaN, -1, 1.1, 0.69]) {
+    const raw = { ...answer(), answers: { ...answer().answers, skipHumanVerification: { type: "noul", noul: value } } };
+    expect(decide(raw, account, email).skipHumanVerification).toBe(false);
+  }
+  const raw = { ...answer(), answers: { ...answer().answers, skipHumanVerification: { type: "noul", noul: 0.99 } } };
+  expect(decide(raw, account, { ...email, truncated: true }).skipHumanVerification).toBe(false);
+  expect(decide(raw, account, { ...email, bodyUnavailable: true }).skipHumanVerification).toBe(false);
+  expect(decide(raw, account, email).skipHumanVerification).toBe(true);
+});

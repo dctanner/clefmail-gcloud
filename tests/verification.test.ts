@@ -403,3 +403,46 @@ test("BIMI exemption is per message and can release its own interrupted hold", a
   expect(f.gmail.contacts.size).toBe(0);
   expect(f.gmail.notices).toHaveLength(1);
 });
+
+test("expected account mail reaches inbox without a challenge or permanent sender trust", async () => {
+  const f = fixture(async () => ({ ...decision, label: null, archive: false, skipHumanVerification: true, verificationSkipProbability: 0.99 }));
+  await f.processor.notification(protectedAccount, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect(f.gmail.notices).toHaveLength(0);
+  expect(f.gmail.contacts.size).toBe(0);
+  expect(f.senders.values.size).toBe(0);
+  expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
+});
+
+test("inbox cold outreach requires verification while archived mail never does", async () => {
+  for (const archive of [true, false]) {
+    const f = fixture(async () => ({ ...decision, archive, skipHumanVerification: false }));
+    await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
+    expect(f.gmail.messages.get("a1")!.labelIds?.includes("Label_held")).toBe(!archive);
+    expect(f.gmail.notices).toHaveLength(archive ? 0 : 1);
+  }
+});
+
+test("protected useful mail skips verification even when an archive safeguard keeps it in inbox", async () => {
+  const f = fixture(async () => ({ ...decision, skipHumanVerification: true, verificationSkipProbability: 0.99 }));
+  f.gmail.messages.get("a1")!.labelIds!.push("IMPORTANT");
+  await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
+  expect(f.gmail.notices).toHaveLength(0);
+});
+
+
+test("a filter archiving between classification and quarantine prevents a new hold", async () => {
+  const f = fixture();
+  const modify = f.gmail.modify.bind(f.gmail);
+  f.gmail.modify = async (id, add, remove) => {
+    await modify(id, add, remove);
+    if (add.includes("Label_receipts")) f.gmail.messages.get(id)!.labelIds = f.gmail.messages.get(id)!.labelIds!.filter(l => l !== "INBOX");
+  };
+  await f.processor.notification(protectedAccount, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect(f.gmail.notices).toHaveLength(0);
+  expect(f.senders.values.size).toBe(0);
+});

@@ -134,7 +134,10 @@ export class Verification {
     }
     const current = await gmail.message(message.id!, "minimal");
     if (current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT"].includes(l))) return true;
-    if (!record.pending.some(item => item.id === message.id)) {
+    const alreadyPending = record.pending.some(item => item.id === message.id);
+    // Filters can archive mail between classification and the sender check.
+    if (!current.labelIds?.includes("INBOX") && !alreadyPending) return false;
+    if (!alreadyPending) {
       if (record.pending.length >= 5000) throw new SafeError("sender_pending_limit");
       record.pending.push({ id: message.id!, restore: !!current.labelIds?.includes("INBOX") });
     }

@@ -27,9 +27,27 @@ The example configuration includes three category labels. You can rename these o
 
 A classified message receives at most one configured category label. When the model is uncertain, Clefmail keeps the message's labels and inbox status. Held messages retain their category label and receive `Clefmail/Held`. They have already been classified and keep their labels when released. Clefmail records completed processing in its private Cloud Storage bucket, so tracking adds no label to your mail.
 
+### Expected mail goes through
+
+Clef also decides whether a message should bypass human verification, independently of its category and archive decision. With the default `verificationSkipThreshold` of `0.70`, a sufficiently strong expected-mail decision lets it reach the inbox. Cold sales pitches, unsolicited recruiting, lead generation, link building, spam and deceptive offers remain subject to sender verification when kept in the inbox.
+
+Expected mail includes:
+
+- Sign-in codes, magic links, email confirmation, password resets, account recovery, MFA and passkey notices.
+- Login and device alerts, suspicious activity, fraud warnings, security incidents and permission changes.
+- Receipts, invoices, refunds, payment problems, subscription changes, bank statements, transfers, tax documents and insurance notices.
+- Order confirmations, deliveries, returns, warranty claims, recalls, bookings and travel changes.
+- Service usage and quota alerts, outages, maintenance, domain or certificate expiry and backup failures.
+- Support replies, case updates, privacy requests, account closure, marketplace conversations and delivery-failure notices.
+- Appointments, healthcare and pharmacy messages, school communications, calendar changes and event updates.
+- Shared documents, access approvals, project updates, job application replies, interviews, payroll, benefits and government or legal notices.
+- Personal replies and clearly subscribed newsletters or updates.
+
+These are content judgments. A sales pitch disguised as a service alert should still require verification. Missing or invalid model answers keep the normal sender checks. Each bypass applies only to that message and creates no contact or permanent sender trust.
+
 ### Human verification
 
-For messages that remain in the inbox after classification and archiving, Clefmail checks Google Contacts, saved verification status and retained Gmail correspondence to decide whether a sender needs verification. Existing contacts and previously verified senders can reach the inbox. Earlier correspondence also bypasses the human check, though AI archiving can still apply to a sender outside your contacts. A plus-tagged reply address is recognized when the reply references a retained sent message to its base address.
+For messages that remain in the inbox and lack an expected-mail bypass, Clefmail checks Google Contacts, saved verification status and retained Gmail correspondence to decide whether a sender needs verification. Existing contacts and previously verified senders can reach the inbox. Earlier correspondence also bypasses the human check, though AI archiving can still apply to a sender outside your contacts. A plus-tagged reply address is recognized when the reply references a retained sent message to its base address.
 
 Further mail from a sender awaiting verification is classified first. Mail that remains in the inbox joins the hold. Clefmail reuses the pending challenge while its link remains valid. Messages moved to Trash or Spam stay there when verification completes, and mail originally archived by a Gmail filter stays archived.
 
@@ -120,6 +138,7 @@ Other optional account settings:
 | `humanVerification` | `true` | Independently quarantine new unknown senders until verified; requires verification service configuration |
 | `probability` | `0.75` | Minimum category probability |
 | `margin` | `0.15` | Minimum margin over the runner-up category |
+| `verificationSkipThreshold` | `0.70` | Minimum model score for useful expected mail to bypass sender verification |
 | `archiveThreshold` | `0.95` | Minimum archive probability |
 
 These thresholds are starting points, **not accuracy guarantees**. Each account supports 1–20 labels. Keep prompts free of credentials and unrelated private information.
@@ -283,8 +302,8 @@ Disable processing and revoke Gmail grants first. Then remove the dedicated Sche
 ## Safety, privacy and deliberate limits
 
 - **Message-level only:** classification adds a category and may remove `INBOX`. Optional verification sends challenge/confirmation emails, creates contacts, and restores only messages recorded as having been in the inbox before quarantine. It never deletes, trashes, marks read, or modifies a whole thread. Unread status and unrelated labels are preserved.
-- **AI archive guardrails:** contacts, the mailbox's own address, and ambiguous/missing senders are protected. Contacts API failures retry instead of permitting an archive. A usable, untruncated plain-text body and valid confident category are required. Freshly checked starred, important, Spam, Trash and draft messages cannot be archived. Header-only classification requires at least 0.90 probability and cannot archive. Invalid archive output means label-only; invalid/abstaining category decisions are recorded privately. Opt-in human-verification quarantine is independent of these AI thresholds and starred/important protection; Spam, Trash and drafts remain excluded.
-- **Text only:** no attachments, HTML conversion, external images, linked-page fetching or conversation history. Email text exists in request memory and goes to the selected provider. Logs contain opaque message/account IDs and outcome codes, not subjects or bodies.
+- **AI archive guardrails:** contacts, the mailbox's own address, and ambiguous/missing senders are protected. Contacts API failures retry instead of permitting an archive. A usable, untruncated text body and valid confident category are required. Freshly checked starred, important, Spam, Trash and draft messages cannot be archived. Header-only classification requires at least 0.90 probability and cannot archive. Invalid archive output means label-only; invalid/abstaining category decisions are recorded privately. Opt-in human-verification quarantine is independent of these AI thresholds and starred/important protection; Spam, Trash and drafts remain excluded.
+- **Text extraction:** plain text is preferred; HTML-only bodies are converted to bounded text. Scripts and images are skipped. Attachments, external resources and linked pages are not fetched. Email text exists in request memory and goes to the selected provider. Logs contain opaque message/account IDs and outcome codes, not subjects or bodies.
 - **Persistent state:** Secret Manager holds credentials/configuration, Pub/Sub holds mailbox/history metadata, Storage holds cursors/watch expiry/leases and optional sender records (email address, secret verification capability, pending message IDs and completion state), and private per-message completion records prevent repeated processing. Treat the private bucket as sensitive mailbox data; there is no automatic sender-record expiration or deletion.
 - **At-least-once, not exactly-once:** crashes can repeat inference and its cost. Processing markers usually prevent repeated completed work. Verification also journals pending messages and completion stages; deterministic Message-IDs and Sent searches reduce duplicate notices, but Gmail send/contact creation is not transactional and ambiguous failures can still duplicate external effects. Removing those markers can permit reprocessing if history is replayed.
 - **No historical recovery:** an expired history cursor is reset to the current baseline; missed mail is not recovered. A failed message can delay subsequent history until retry; notifications can eventually dead-letter. No automatic dead-letter replay, inbox scan, reconciliation job or backfill is provided.

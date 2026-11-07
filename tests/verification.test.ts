@@ -501,7 +501,7 @@ test("new company trust releases a resumed hold without sending another email", 
   expect(f.gmail.contacts.size).toBe(0);
 });
 
-test("unreadable and incomplete bodies cause no classification, hold, or notice", async () => {
+test("empty, unreadable or data-only bodies cause no classification, hold, or notice", async () => {
   for (const body of [undefined, {data: "!!!"}, {data: Buffer.from(" ").toString("base64url")},
     {data: Buffer.from("x".repeat(41000)).toString("base64url")}]) {
     const f = fixture();
@@ -512,6 +512,20 @@ test("unreadable and incomplete bodies cause no classification, hold, or notice"
     expect(f.gmail.notices).toHaveLength(0);
     expect(f.senders.values.size).toBe(0);
     expect(f.state.snapshot!.data.historyId).toBe("200");
+  }
+});
+
+test("shortened readable bodies follow the model action, with archive before verification", async () => {
+  for (const archive of [true, false]) {
+    const f = fixture(async () => ({...decision, archive, truncated: true}));
+    f.gmail.messages.get("a1")!.payload!.body = {
+      data: Buffer.from("Readable email details. ".repeat(3000)).toString("base64url"),
+    };
+    await f.processor.notification({...protectedAccount, archiveEnabled: true}, "200");
+    expect(f.classified()).toBe(1);
+    expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+    expect(f.gmail.messages.get("a1")!.labelIds!.includes("Label_held")).toBe(!archive);
+    expect(f.gmail.notices.length).toBe(archive ? 0 : 1);
   }
 });
 

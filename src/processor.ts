@@ -10,7 +10,7 @@ import { isVerificationTest, type Verification } from "./verification.js";
 // Deterministic per-message outcomes: retrying cannot succeed, so abstain instead of
 // blocking every later message in the mailbox.
 const TERMINAL_CLASSIFIER_ERRORS = [
-  "invalid_label_answer", "invalid_probability_total", "choice_not_maximum", "ai_request_limit",
+  "invalid_label_answer", "invalid_probability_total", "choice_not_maximum", "ai_request_limit", "unreadable_body",
 ];
 
 export interface Dependencies {
@@ -47,8 +47,8 @@ export class Processor {
     if (processed && !resume) return;
     if (verify && !this.deps.verification) throw new SafeError("verification_not_configured");
     const email = await extract(message, attachmentId => gmail.attachment(id, attachmentId));
-    if (email.bodyUnavailable || email.truncated || !email.body.trim()) {
-      this.log("message_skipped", { account: account.id, message: id, reason: email.truncated ? "incomplete_body" : "unreadable_body" });
+    if (email.bodyUnavailable || !email.body.trim()) {
+      this.log("message_skipped", { account: account.id, message: id, reason: "unreadable_body" });
       return;
     }
     if (resume) {
@@ -91,6 +91,7 @@ export class Processor {
     this.log("message_classified", {
       account: account.id, message: id, label: decision.label, archiveProbability: decision.archiveProbability,
       archiveBlock: block, action: decision.action, actionProbability: decision.actionProbability,
+      bodyTruncated: email.truncated,
       verificationPolicy: block === null ? "archived" : modelBypass ? "expected_mail" : checkSender ? "sender_checks" : "not_required",
     });
     const add: string[] = [];

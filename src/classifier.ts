@@ -17,12 +17,13 @@ export class Classifier {
       ? `https://api.cloudflare.com/client/v4/accounts/${this.provider.accountId}/ai/run/@cf/cloudflare/clef`
       : "https://api.typesafe.ai/v1/systemone";
     const model = this.provider.kind === "clef" ? "clef" : this.provider.model;
+    const input = request(account, email, model);
     const raw = await jsonRequest("classifier", url, {
       method: "POST",
       headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify(request(account, email, model)),
+      body: JSON.stringify(input),
     }, { fetch: this.fetcher, signal, maxBytes: 131_072 });
     if (clef && raw?.success !== true) throw new SafeError("classifier_unsuccessful");
-    return decide(clef ? raw.result : raw, account, email);
+    return decide(clef ? raw.result : raw, account, input.state);
   }
 }

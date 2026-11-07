@@ -27,14 +27,18 @@ export interface EmailText {
   originalBytes: number;
 }
 const HTML_LIMIT = "[CLEFMAIL_HTML_LIMIT]";
+export const BODY_MAX_CHARS = 12_000;
+export const BODY_MAX_BYTES = 16_384;
+const SOURCE_MAX_BYTES = 524_288;
 const htmlText = compile({
   wordwrap: false,
+  preserveNewlines: true,
   limits: { maxInputLength: 524288, maxDepth: 200, maxChildNodes: 10000, ellipsis: HTML_LIMIT },
-  selectors: ["script", "style", "head", "img", "iframe", "object", "form", "[hidden]", '[aria-hidden="true"]'].map(selector => ({ selector, format: "skip" })),
+  selectors: ["script", "style", "head", "img", "svg", "canvas", "picture", "audio", "video", "source", "iframe", "embed", "object", "form", "[hidden]", '[aria-hidden="true"]'].map(selector => ({ selector, format: "skip" })),
 });
 const encoder = new TextEncoder();
 const CONTENT_ERRORS = new Set([
-  "mime_limit", "body_limit", "body_fetch_limit", "body_encoding", "decoded_limit", "body_charset",
+  "mime_limit", "body_fetch_limit", "body_encoding", "body_charset",
   "gmail_response_limit", "body_html",
 ]);
 const header = (part: Part | undefined, name: string) =>
@@ -42,18 +46,51 @@ const header = (part: Part | undefined, name: string) =>
     ?.value || "";
 const clean = (s: string) =>
   s.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
-export function clip(s: string, chars = 40000, bytes = 49152) {
+export function clip(s: string, chars = BODY_MAX_CHARS, bytes = BODY_MAX_BYTES, jsonBytes = Infinity) {
   let result = "",
     n = 0,
-    b = 0;
+    b = 0,
+    j = 0;
   for (const ch of s) {
     const size = encoder.encode(ch).length;
-    if (n >= chars || b + size > bytes) break;
+    const jsonSize = Number.isFinite(jsonBytes) ? Buffer.byteLength(JSON.stringify(ch)) - 2 : 0;
+    if (n >= chars || b + size > bytes || j + jsonSize > jsonBytes) break;
     result += ch;
     n++;
     b += size;
+    j += jsonSize;
   }
   return result;
+}
+
+function stripEmbeddedData(text: string): string {
+  return text
+    // Inline resources can appear in visible text, attributes or plain MIME parts.
+    .replace(/\bdata:[^\s,<>"']*;base64,\s*[A-Za-z0-9+/_=-]*(?:\n[ \t]*[A-Za-z0-9+/_=-]{16,})*/gi, "")
+    .replace(/\bdata:[^\s,<>"']*,\s*[^\s<>"')\]]*/gi, "")
+    .replace(/\bcid:[^\s<>"')\]]+/gi, "")
+    // Remove wrapped base64 blocks before HTML conversion collapses whitespace.
+    .replace(/^[ \t]*(?:[A-Za-z0-9+/_-]{20,}={0,2}[ \t]*(?:\n|$)){2,}/gm, "")
+    .replace(/[A-Za-z0-9+/_-]{64,}={0,2}/g, "")
+    .replace(/\b[A-Za-z0-9+/_-]{16,}={1,2}(?=$|[\s<>"')\]])/g, "");
+}
+
+export function plainText(text: string): { text: string; truncated: boolean } {
+  const source = stripEmbeddedData(clean(text))
+    // Angle-bracket email addresses are text, even in a plain MIME part.
+    .replace(/<([^<>\s]+@[^<>\s]+|https?:\/\/[^<>\s]+)>/gi, "&lt;$1&gt;");
+  const converted = htmlText(source);
+  return {
+    text: stripEmbeddedData(clean(converted))
+      .replaceAll(HTML_LIMIT, "")
+      // Escaped markup can become visible text when HTML entities are decoded.
+      .replace(/<\/?[a-z][\w:-]*(?:\s[^<>]*)?\s*\/?>/gi, "")
+      .replace(/[^\S\n]+/g, " ")
+      .replace(/ *\n */g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+    truncated: source.length > 524288 || converted.includes(HTML_LIMIT),
+  };
 }
 export function received(m: Message, email: string) {
   const labels = m.labelIds || [];
@@ -96,6 +133,7 @@ export async function extract(
     if (
       p.filename?.trim() ||
       /\battachment\b/i.test(header(p, "Content-Disposition")) ||
+      /\b(?:filename|name)(?:\*\d+)?\*?\s*=/i.test(`${header(p, "Content-Disposition")};${header(p, "Content-Type")}`) ||
       p.mimeType?.toLowerCase() === "message/rfc822"
     )
       return "";
@@ -110,21 +148,23 @@ export async function extract(
       return texts.join("\n");
     }
     if (mime !== wanted) return "";
-    if ((p.body?.size || 0) > 262144) throw new SafeError("body_limit");
     let data = p.body?.data;
     if (!data && p.body?.attachmentId) {
       if (++fetches > 4) throw new SafeError("body_fetch_limit");
       const body = await attachment(p.body.attachmentId);
-      if ((body.size || 0) > 262144) throw new SafeError("body_limit");
       data = body.data;
     }
     if (!data) return "";
-    if (data.length > 350000 || !/^[A-Za-z0-9_\-]*={0,2}$/.test(data))
+    if (!/^[A-Za-z0-9_\-]*={0,2}$/.test(data))
       throw new SafeError("body_encoding");
+    const encoded = data.slice(0, Math.floor((SOURCE_MAX_BYTES - decoded) / 3) * 4);
+    const shortened = encoded.length < data.length;
+    result.truncated ||= shortened;
+    if (!encoded) return "";
     let raw: Uint8Array;
     try {
       raw = Uint8Array.from(
-        atob(data.replace(/-/g, "+").replace(/_/g, "/")),
+        atob(encoded.replace(/-/g, "+").replace(/_/g, "/")),
         (c) => c.charCodeAt(0),
       );
     } catch {
@@ -132,15 +172,15 @@ export async function extract(
     }
     decoded += raw.length;
     result.originalBytes += p.body?.size || raw.length;
-    if (decoded > 524288) throw new SafeError("decoded_limit");
     const charset =
       /charset\s*=\s*["']?([^\s;"']+)/i.exec(header(p, "Content-Type"))?.[1] ||
       "utf-8";
     try {
-      const text = new TextDecoder(charset, { fatal: true, ignoreBOM: false }).decode(raw);
-      const isHtml = wanted === "text/html" || /^\s*(?:<!doctype\s+html\b|<html\b)/i.test(text) ||
-        /<(html|body|p|div|table|a|b|strong|em|span)\b[^>]*>[\s\S]*<\/\1\s*>/i.test(text);
-      return clean(isHtml ? htmlText(text) : text);
+      // Streaming decode leaves a cut UTF-8 character out of the retained prefix.
+      const text = new TextDecoder(charset, { fatal: true, ignoreBOM: false }).decode(raw, { stream: shortened });
+      const converted = plainText(text);
+      result.truncated ||= converted.truncated;
+      return converted.text;
     } catch {
       throw new SafeError("body_charset");
     }
@@ -150,8 +190,8 @@ export async function extract(
     // contain browser-view stubs, CSS, or raw markup. Convert the HTML to text.
     let full = m.payload ? await walk(m.payload, 0, "text/html") : "";
     if (!full.trim() && m.payload) full = await walk(m.payload, 0, "text/plain");
-    result.body = clip(full);
-    result.truncated = result.body !== full || full.includes(HTML_LIMIT);
+    result.body = clip(full).trimEnd();
+    result.truncated ||= result.body !== full;
     result.bodyUnavailable = !result.body.trim();
   } catch (e) {
     // Content failures make the message ineligible for processing. Transient

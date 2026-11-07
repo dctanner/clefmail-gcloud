@@ -87,6 +87,15 @@ test("a malformed label response becomes a processed abstention, never an archiv
   expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
 });
 
+test("text removed by final request cleaning skips all Gmail actions", async () => {
+  const f = fixture();
+  f.deps.classify = async () => { throw new SafeError("unreadable_body"); };
+  await f.processor.notification(account, "200");
+  expect(f.gmail.modifications).toEqual([]);
+  expect(f.gmail.notices).toEqual([]);
+  expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
+});
+
 test("unknown mutation outcome retries safely before private completion is recorded", async () => {
   const f = fixture();
   const modify = f.gmail.modify.bind(f.gmail);

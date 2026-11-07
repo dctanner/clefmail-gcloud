@@ -19,11 +19,12 @@ export const email: EmailText = {
 export const answer = (p = 0.99, archive: unknown = 0.99) => ({
   model: "jev-test", answers: {
     label: { type: "choice", choice: "receipts", confidence: 0.99, probabilities: { receipts: p, no_match: 1 - p } },
-    archive: { type: "noul", noul: archive },
+    action: { type: "choice", choice: typeof archive === "number" && archive < 0.5 ? "verify" : "archive", confidence: 0.99,
+      probabilities: { archive, deliver: 0, verify: typeof archive === "number" ? 1 - archive : 0 } },
   },
 });
 export const decision: Decision = {
-  skipHumanVerification: false, verificationSkipProbability: null,
+  action: "verify", actionProbability: 0.99,
   label: "receipts", archive: true, archiveProbability: 0.99, archiveError: null,
   reason: null, bodyUnavailable: false, truncated: false,
 };
@@ -59,6 +60,7 @@ export class FakeGmail implements GmailPort {
   watchCalls = 0;
   contacts = new Set<string>();
   corresponded = false;
+  domainCorresponded = false;
   notices: { to: string; subject: string; body: string; key: string }[] = [];
   profileEmail = account.email;
   profileHistory = "300";
@@ -84,6 +86,7 @@ export class FakeGmail implements GmailPort {
   async hasContact(email: string) { return this.contacts.has(email); }
   async addContact(email: string) { this.contacts.add(email); }
   async hasCorresponded() { return this.corresponded; }
+  async hasDomainCorresponded() { return this.domainCorresponded; }
   async releaseHeld(id: string, heldLabel: string, restoreInbox: boolean) {
     await this.modify(id, restoreInbox ? ["INBOX"] : [], [heldLabel]);
   }

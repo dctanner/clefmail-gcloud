@@ -137,3 +137,17 @@ test("a plus alias without a reply reference cannot inherit trust from its base 
   });
   expect(await gmail.hasCorresponded("dpo+noreply@coinbase.com", message())).toBe(false);
 });
+
+
+test("company-domain correspondence requires an exact recipient in human-sent mail", async () => {
+  for(const [to,auto,want] of [["colleague@company.example","",true],["person@company.example.attacker.test","",false],["person@company.example","auto-replied",false]] as const){
+    const gmail=client(url=>url.pathname.endsWith("/messages")?Response.json({messages:[{id:"a0"}]}):Response.json({id:"a0",labelIds:["SENT"],payload:{headers:[{name:"To",value:to},{name:"Auto-Submitted",value:auto}]}}));
+    expect(await gmail.hasDomainCorresponded("company.example")).toBe(want);
+  }
+});
+
+test("shared providers never confer domain familiarity", async()=>{
+  const gmail=client(()=>{throw new Error("No lookup allowed");});
+  for(const domain of ["gmail.com","yahoo.co.uk","hotmail.fr","outlook.com","icloud.com","proton.me","fastmail.com","mail.ru","qq.com","privaterelay.appleid.com"])
+    expect(await gmail.hasDomainCorresponded(domain)).toBe(false);
+});

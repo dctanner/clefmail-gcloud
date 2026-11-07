@@ -1,4 +1,5 @@
 // Bounded plain-text extractor adapted from the sibling clefmail implementation.
+import type { SenderContext } from "./sender-context.js";
 import { compile } from "html-to-text";
 import { SafeError } from "./errors.js";
 export interface Message {
@@ -15,6 +16,7 @@ interface Part {
   parts?: Part[];
 }
 export interface EmailText {
+  senderContext?: SenderContext;
   from: string;
   to: string;
   subject: string;

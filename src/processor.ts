@@ -55,6 +55,7 @@ export class Processor {
     }
     const email = await extract(message, attachmentId => gmail.attachment(id, attachmentId));
     if (headerOnly) Object.assign(email, { body: "", bodyUnavailable: true, truncated: true });
+    email.senderContext = await this.deps.verification?.describeSender(account, message, gmail);
     let decision: Decision;
     try {
       decision = await this.deps.classify(account, email, signal);
@@ -67,7 +68,7 @@ export class Processor {
       const code = error.code;
       decision = {
         label: null, archive: false, archiveProbability: null, archiveError: code,
-        skipHumanVerification: false, verificationSkipProbability: null,
+        action: "verify", actionProbability: null,
         reason: code, bodyUnavailable: email.bodyUnavailable, truncated: email.truncated,
       };
     }
@@ -84,14 +85,14 @@ export class Processor {
     const sender = senderOf(message);
     // Lookup errors retry; they never mean "not a contact". This guard also
     // applies when human verification is disabled.
-    const protectedSender = !sender || sender === account.email || await gmail.hasContact(sender) ||
-      !!(account.humanVerification && await this.deps.verification?.trusted(account, sender));
+    const protectedSender = !sender || sender === account.email || (email.senderContext?.contact ?? await gmail.hasContact(sender)) ||
+      !!(account.humanVerification && email.senderContext?.verified);
     const block = protectedSender ? "protected_sender" : archiveBlock(decision, account, current.labelIds || []);
-    const modelBypass = decision.skipHumanVerification && !decision.bodyUnavailable && !decision.truncated && !isVerificationTest(account, message);
+    const modelBypass = decision.action !== "verify" && !isVerificationTest(account, message);
     const checkSender = verify && !modelBypass && block !== null && !!current.labelIds?.includes("INBOX");
     this.log("message_classified", {
       account: account.id, message: id, label: decision.label, archiveProbability: decision.archiveProbability,
-      archiveBlock: block, verificationSkipProbability: decision.verificationSkipProbability,
+      archiveBlock: block, action: decision.action, actionProbability: decision.actionProbability,
       verificationPolicy: block === null ? "archived" : modelBypass ? "expected_mail" : checkSender ? "sender_checks" : "not_required",
     });
     const add: string[] = [];
@@ -105,8 +106,7 @@ export class Processor {
     // One message-level modification, never a thread update, send, trash, or delete.
     if (add.length || block === null) await gmail.modify(id, add, block === null ? ["INBOX"] : []);
     if (checkSender) {
-      if (await this.deps.verification!.quarantine(account, message, gmail, labels, session)) return;
-
+      if (await this.deps.verification!.quarantine(account, message, gmail, labels, session, email.senderContext)) return;
     }
     this.log("message_processed", {
       account: account.id, message: id, label: decision.label,

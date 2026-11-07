@@ -1,3 +1,4 @@
+import { customSenderDomain } from "./sender-context.js";
 import { z } from "zod";
 import { PROCESSED_LABEL, HELD_LABEL, type Account } from "./config.js";
 import { HttpError, SafeError } from "./errors.js";
@@ -35,6 +36,7 @@ export interface GmailPort {
   hasContact(email: string): Promise<boolean>;
   addContact(email: string): Promise<void>;
   hasCorresponded(email: string, current: Message): Promise<boolean>;
+  hasDomainCorresponded(domain: string): Promise<boolean>;
   releaseHeld(id: string, heldLabel: string, restoreInbox: boolean): Promise<void>;
   sendNotice(to: string, subject: string, body: string, key: string, replyTo?: string): Promise<void>;
 }
@@ -261,6 +263,26 @@ export class Gmail implements GmailPort {
       query.set("pageToken", result.nextPageToken);
     }
     throw new SafeError("correspondence_page_limit");
+  }
+
+  async hasDomainCorresponded(domain: string): Promise<boolean> {
+    if (!customSenderDomain(domain)) return false;
+    const query = new URLSearchParams({ q: `in:sent {to:${domain} cc:${domain} bcc:${domain}}`, maxResults: "50" });
+    for (let page = 0; page < 5; page++) {
+      const result = z.object({ messages: z.array(z.object({ id: messageId })).default([]), nextPageToken: z.string().optional() })
+        .parse(await this.call(`messages?${query}`));
+      for (const candidate of result.messages) {
+        let sent: Message;
+        try { sent = await this.message(candidate.id, "metadata"); }
+        catch (error) { if (error instanceof HttpError && error.status === 404) continue; throw error; }
+        if (!sent.labelIds?.includes("SENT") || sent.labelIds.includes("DRAFT") ||
+            /auto-/i.test(header(sent, "Auto-Submitted")) || header(sent, "Message-ID").includes("@clefmail.invalid")) continue;
+        if (["To", "Cc", "Bcc"].some(name => addresses(header(sent, name))?.some(email => email.split("@")[1] === domain))) return true;
+      }
+      if (!result.nextPageToken) return false;
+      query.set("pageToken", result.nextPageToken);
+    }
+    throw new SafeError("company_correspondence_page_limit");
   }
 
   private async hasSentReplyAlias(email: string, current: Message): Promise<boolean> {

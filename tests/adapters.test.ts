@@ -18,7 +18,7 @@ test("Clef REST unwraps result; Jev uses direct answers; no fallback requests", 
         expect(new Headers(init.headers).get("Authorization")).toBe("Bearer synthetic-key");
         const input = JSON.parse(String(init.body));
         expect(input.model).toBe(kind === "clef" ? "clef" : "jev-latest");
-        expect(input.questions.archive.type).toBe("noul");
+        expect(input.questions.action.type).toBe("choice");
         expect(input.state.body).toBe(email.body);
         return json(kind === "clef" ? { success: true, result: answer() } : answer());
       }));

@@ -61,7 +61,6 @@ test("new sender labeled before challenge; each new message is classified before
 
 test("AI-archived mail skips sender verification entirely", async () => {
   const f = fixture();
-  f.gmail.hasCorresponded = async () => { throw new Error("Verification must be skipped"); };
   await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
   expect(f.classified()).toBe(1);
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
@@ -93,11 +92,12 @@ test("classification failure leaves mail untouched and sends no challenge", asyn
   expect(f.state.snapshot!.data.historyId).toBe("100");
 });
 
-test("failed sender lookup after labeling retries without losing verification", async () => {
+test("failed sender context lookup retries before classification or labeling", async () => {
   const f = fixture();
   f.gmail.hasCorresponded = async () => { throw new SafeError("lookup_failed"); };
   await expect(f.processor.notification(protectedAccount, "200")).rejects.toThrow("lookup_failed");
-  expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_receipts");
+  expect(f.classified()).toBe(0);
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_done");
   f.gmail.hasCorresponded = async () => false;
   await f.processor.notification(protectedAccount, "200");
@@ -405,7 +405,7 @@ test("BIMI exemption is per message and can release its own interrupted hold", a
 });
 
 test("expected account mail reaches inbox without a challenge or permanent sender trust", async () => {
-  const f = fixture(async () => ({ ...decision, label: null, archive: false, skipHumanVerification: true, verificationSkipProbability: 0.99 }));
+  const f = fixture(async () => ({ ...decision, label: null, archive: false, action: "deliver" as const, actionProbability: 0.99 }));
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
@@ -417,7 +417,7 @@ test("expected account mail reaches inbox without a challenge or permanent sende
 
 test("inbox cold outreach requires verification while archived mail never does", async () => {
   for (const archive of [true, false]) {
-    const f = fixture(async () => ({ ...decision, archive, skipHumanVerification: false }));
+    const f = fixture(async () => ({ ...decision, archive, action: "verify" as const }));
     await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
     expect(f.gmail.messages.get("a1")!.labelIds?.includes("Label_held")).toBe(!archive);
     expect(f.gmail.notices).toHaveLength(archive ? 0 : 1);
@@ -425,7 +425,7 @@ test("inbox cold outreach requires verification while archived mail never does",
 });
 
 test("protected useful mail skips verification even when an archive safeguard keeps it in inbox", async () => {
-  const f = fixture(async () => ({ ...decision, skipHumanVerification: true, verificationSkipProbability: 0.99 }));
+  const f = fixture(async () => ({ ...decision, action: "deliver" as const, actionProbability: 0.99 }));
   f.gmail.messages.get("a1")!.labelIds!.push("IMPORTANT");
   await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
@@ -445,4 +445,58 @@ test("a filter archiving between classification and quarantine prevents a new ho
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
   expect(f.gmail.notices).toHaveLength(0);
   expect(f.senders.values.size).toBe(0);
+});
+
+
+test("one classifier call receives existing sender and custom-domain context", async () => {
+  const f=fixture();f.gmail.domainCorresponded=true;
+  let calls=0;
+  const processor=new Processor({state:f.state,gmail:()=>f.gmail,verification:f.verification,log:()=>{},classify:async(_account,email)=>{
+    calls++;
+    expect(email.senderContext).toMatchObject({sentToSameCustomDomain:true,contact:false,previousCorrespondence:false});
+    return {...decision,archive:false,action:"deliver",actionProbability:.95};
+  }});
+  await processor.notification(protectedAccount,"200");
+  expect(calls).toBe(1);expect(f.gmail.notices).toHaveLength(0);
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
+});
+
+test("archive intent never becomes verification when confidence keeps it in inbox", async () => {
+  const f=fixture(async()=>({...decision,action:"archive" as const,archive:false,actionProbability:.8}));
+  await f.processor.notification(protectedAccount,"200");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
+  expect(f.gmail.notices).toHaveLength(0);
+});
+
+test("trusted company domain bypasses verification even when the model chooses verify", async () => {
+  const f = fixture(async () => ({ ...decision, archive: false, action: "verify" as const }));
+  f.gmail.domainCorresponded = true;
+  await f.processor.notification(protectedAccount, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect(f.gmail.notices).toHaveLength(0);
+  expect(f.senders.values.size).toBe(0);
+});
+
+test("trusted company mail still follows the archive policy", async () => {
+  const f = fixture(async () => ({ ...decision, action: "archive" as const }));
+  f.gmail.domainCorresponded = true;
+  await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect(f.gmail.notices).toHaveLength(0);
+});
+
+test("new company trust releases a resumed hold without sending another email", async () => {
+  const f = fixture();
+  await f.processor.notification(protectedAccount, "200");
+  expect((await f.record()).pending).toHaveLength(1);
+  f.gmail.domainCorresponded = true;
+  f.gmail.pages = [{ historyId: "250", history: [{ id: "250", messagesAdded: [{ message: { id: "a1" } }] }] }];
+  await f.processor.notification(protectedAccount, "250");
+  expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
+  expect((await f.record()).pending).toHaveLength(0);
+  expect(f.gmail.notices).toHaveLength(1);
+  expect(f.gmail.contacts.size).toBe(0);
 });

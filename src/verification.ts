@@ -7,6 +7,7 @@ import type { GmailPort, LabelMap } from "./gmail.js";
 import { verifyMailbox } from "./gmail.js";
 import { header, mayChallenge, senderOf } from "./sender.js";
 import { MailboxSession, type StateStore } from "./state.js";
+import type { SenderContext } from "./sender-context.js";
 import { BimiPolicy } from "./bimi.js";
 import type { Message } from "./text.js";
 
@@ -98,8 +99,26 @@ export class Verification {
     };
   }
 
+  async describeSender(account: Account, message: Message, gmail: GmailPort): Promise<SenderContext> {
+    const sender = senderOf(message);
+    const context: SenderContext = { ownAddress: sender === account.email, contact: false, previousCorrespondence: false,
+      verified: false, pendingVerification: false, sentToSameCustomDomain: false, bimiDmarc: false, verificationTest: isVerificationTest(account, message) };
+    if (!sender || context.ownAddress || context.verificationTest) return context;
+    const record = (await this.deps.senders.read(account.id, senderKey(account, message, sender)))?.record;
+    context.pendingVerification = record?.status === "pending";
+    context.verified = !!record && record.status !== "pending";
+    context.contact = await gmail.hasContact(sender);
+    if (context.contact || context.verified) return context;
+    if (!context.pendingVerification) context.previousCorrespondence = await gmail.hasCorresponded(sender, message);
+    if (context.previousCorrespondence) return context;
+    context.sentToSameCustomDomain = await gmail.hasDomainCorresponded(sender.split("@")[1]!);
+    if (context.sentToSameCustomDomain) return context;
+    context.bimiDmarc = await this.bimi.allows(message);
+    return context;
+  }
+
   async quarantine(account: Account, message: Message, gmail: GmailPort, labels: LabelMap,
-    session: MailboxSession): Promise<boolean> {
+    session: MailboxSession, facts?: SenderContext): Promise<boolean> {
     const sender = senderOf(message);
     const test = isVerificationTest(account, message);
     if (!sender || (!test && sender === account.email)) return false;
@@ -107,15 +126,16 @@ export class Verification {
     const context = await this.context(account, key, session);
     let record = context.record;
     // Contact additions outside Clefmail also override quarantine immediately.
-    const contact = !test && await gmail.hasContact(sender);
+    const contact = !test && (facts?.contact ?? await gmail.hasContact(sender));
     if (record && (contact || record.status !== "pending")) {
       if (record.status !== "verified" || record.pending.length || !record.successSent)
         await this.finish(account, key, record, gmail, session, context.save);
       return false;
     }
     if (contact) return false;
-    if (!test && await this.bimi.allows(message)) {
-      // Exemption belongs to this authenticated message, never the whole sender.
+    const companyTrusted = !test && (facts?.sentToSameCustomDomain ?? await gmail.hasDomainCorresponded(sender.split("@")[1]!));
+    if (!test && (companyTrusted || (facts?.bimiDmarc ?? await this.bimi.allows(message)))) {
+      // Release this message without creating a contact or sending a success notice.
       const held = record?.pending.find(item => item.id === message.id);
       if (held) {
         const current = await gmail.message(message.id!, "minimal");
@@ -127,7 +147,7 @@ export class Verification {
       }
       return false;
     }
-    if (!test && !record && await gmail.hasCorresponded(sender, message)) return false;
+    if (!test && !record && (facts?.previousCorrespondence ?? await gmail.hasCorresponded(sender, message))) return false;
     if (!record) {
       record = { email: sender, status: "pending", token: randomBytes(32).toString("base64url"),
         expiresAt: this.now() + 30 * 86400_000, challenged: false, successSent: false, pending: [], test };

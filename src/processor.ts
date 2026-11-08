@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type { Account } from "./config.js";
+import { HOLD_LABEL, type Account } from "./config.js";
 import type { Decision } from "./decision.js";
 import { errorCode, HttpError, log, SafeError } from "./errors.js";
 import { type GmailPort, type LabelMap, verifyMailbox } from "./gmail.js";
@@ -14,7 +14,7 @@ const TERMINAL_CLASSIFIER_ERRORS = [
   "invalid_route_answer", "ai_request_limit", "unreadable_body", "classifier_refused",
 ];
 
-export type InboxOutcome = "inbox" | "archived" | "flagged" | "skipped";
+export type InboxOutcome = "inbox" | "archived" | "hold" | "flagged" | "skipped";
 
 type MessageRun = { mode: "live"; session: MailboxSession } |
   { mode: "inbox"; acquire(): Promise<MailboxSession | InboxOutcome> };
@@ -47,7 +47,10 @@ export class Processor {
     }
     const inboxRun = run.mode === "inbox";
     const outsideInbox = (ids: string[] = []) => !ids.includes("INBOX") || ids.includes(labels.held);
-    if ((inboxRun && outsideInbox(message.labelIds)) || !received(message, account.email)) return "skipped";
+    if (!received(message, account.email)) return "skipped";
+    // A retry after Gmail accepted a manual hold can recover the outcome from its label.
+    if (message.labelIds?.includes(labels.hold)) return inboxRun ? "hold" : "skipped";
+    if (inboxRun && outsideInbox(message.labelIds)) return "skipped";
     const verify = account.humanVerification || isVerificationTest(account, message);
     const resume = !inboxRun && verify &&
       await this.deps.verification?.needsResume(account, message);
@@ -83,9 +86,10 @@ export class Processor {
     const session = run.mode === "live" ? run.session : await run.acquire();
     if (typeof session === "string") return session;
     const current = await gmail.message(id, "minimal");
-    if (inboxRun ? outsideInbox(current.labelIds) : current.labelIds?.includes(labels.processed)) return "skipped";
     if (current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT"].includes(l))) return "skipped";
     const currentLabels = current.labelIds || [];
+    if (currentLabels.includes(labels.hold)) return inboxRun ? "hold" : "skipped";
+    if (inboxRun ? outsideInbox(currentLabels) : currentLabels.includes(labels.processed)) return "skipped";
     const inInbox = currentLabels.includes("INBOX");
     const test = isVerificationTest(account, message);
     let label = !test && decision.action === "file" ? decision.label : null;
@@ -97,15 +101,17 @@ export class Processor {
     }
     const suspicious = decision.action === "suspicious";
     if (suspicious) label = decision.label;
-    const archive = !!label && account.archiveEnabled && inInbox;
     const checkSender = verify && inInbox && (decision.choice ?? decision.action) !== "suspicious" && (test || decision.action === "verify");
+    const manualHold = inboxRun && checkSender;
+    if (manualHold) label = HOLD_LABEL;
+    const archive = !!label && account.archiveEnabled && inInbox;
     this.log("message_classified", {
       account: account.id, message: id, source: run.mode, label, action: decision.action, choice: decision.choice ?? null,
       actionProbability: decision.actionProbability, provider: decision.provider ?? null,
       model: decision.model ?? null, bodyTruncated: email.truncated,
-      verificationPolicy: checkSender ? (inboxRun ? "report_only" : "sender_checks") : "not_required",
+      verificationPolicy: manualHold ? "manual_review" : checkSender ? "sender_checks" : "not_required",
     });
-    const selected = label ? labels.options[label] : undefined;
+    const selected = manualHold ? labels.hold : label ? labels.options[label] : undefined;
     if (label && !selected) throw new SafeError("unmapped_label");
     const add = selected && (archive || !currentLabels.includes(selected)) ? [selected] : [];
     const remove = archive ? ["INBOX"] : [];
@@ -122,8 +128,8 @@ export class Processor {
     this.log("message_processed", {
       account: account.id, message: id, label, archived: archive, reason: decision.reason,
     });
-    if (archive) return "archived";
-    return checkSender ? "flagged" : "inbox";
+    if (manualHold) return "hold";
+    return archive ? "archived" : "inbox";
   }
 
   // An explicit inbox run applies current rules even to previously processed mail.

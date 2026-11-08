@@ -274,7 +274,7 @@ test("inbox run reclassifies old markers, replaces only configured categories an
   expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["UNREAD", "Label_personal", "Label_done", "Label_receipts"]);
 });
 
-test("old pitches are reported in the inbox without a hold or a notice", async () => {
+test("a batch pitch goes to manual review and never enters sender verification", async () => {
   const f = fixture();
   const verification = {
     describeSender: async () => undefined,
@@ -282,9 +282,22 @@ test("old pitches are reported in the inbox without a hold or a notice", async (
     quarantine: async () => { throw Error("unexpected hold"); },
   } as unknown as import("../src/verification.js").Verification;
   const processor = new Processor({ ...f.deps, verification, classify: async () => verifyDecision });
-  const result = await processor.processInboxItem({ ...account, humanVerification: true }, "a1", f.gmail, f.gmail.labelMap, inboxJournal());
-  expect(result).toBe("flagged");
-  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["INBOX"]);
+  const batchAccount = { ...account, humanVerification: true };
+  f.gmail.messages.set("a1", message("a1", ["INBOX", "UNREAD", "Label_receipts", "Label_personal"]));
+  const run = () => processor.processInboxItem(batchAccount, "a1", f.gmail, f.gmail.labelMap, inboxJournal());
+  expect(await run()).toBe("hold");
+  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["UNREAD", "Label_personal", "Label_hold"]);
+  expect(f.gmail.modifications).toEqual([{ id: "a1", add: ["Label_hold"], remove: ["INBOX", "Label_receipts"] }]);
+  // A lost journal entry after a successful Gmail write must not send a challenge or lose the outcome.
+  expect(await run()).toBe("hold");
+  await processor.notification(batchAccount, "200");
+  expect(f.gmail.modifications).toHaveLength(1);
+  f.gmail.messages.set("a2", message("a2"));
+  expect(await processor.processInboxItem({ ...batchAccount, archiveEnabled: false }, "a2", f.gmail, f.gmail.labelMap, inboxJournal())).toBe("hold");
+  expect(f.gmail.messages.get("a2")!.labelIds).toEqual(["INBOX", "Label_hold"]);
+  f.gmail.messages.set("a3", message("a3"));
+  expect(await processor.processInboxItem(account, "a3", f.gmail, f.gmail.labelMap, inboxJournal())).toBe("inbox");
+  expect(f.gmail.messages.get("a3")!.labelIds).toEqual(["INBOX"]);
   expect(f.gmail.notices).toEqual([]);
 });
 

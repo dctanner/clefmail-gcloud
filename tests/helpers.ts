@@ -59,7 +59,7 @@ export class FakeGmail implements GmailPort {
   profileEmail = account.email;
   profileHistory = "300";
   pages: HistoryPage[] = [{ historyId: "200", history: [{ id: "150", messagesAdded: [{ message: { id: "a1" } }] }] }];
-  labelMap: LabelMap = { processed: "Label_done", held: "Label_held", options: { receipts: "Label_receipts", "Clefmail/Suspicious": "Label_suspicious" } };
+  labelMap: LabelMap = { processed: "Label_done", held: "Label_held", hold: "Label_hold", options: { receipts: "Label_receipts", "Clefmail/Suspicious": "Label_suspicious" } };
   async profile() { return { emailAddress: this.profileEmail, historyId: this.profileHistory }; }
   async history(cursor: string, token?: string) {
     this.historyCalls.push([cursor, token]);

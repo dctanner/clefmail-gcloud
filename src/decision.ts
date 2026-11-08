@@ -1,4 +1,4 @@
-import { SUSPICIOUS_LABEL, type Account, type Config } from "./config.js";
+import { HOLD_LABEL, SUSPICIOUS_LABEL, type Account, type Config } from "./config.js";
 import { BODY_MAX_BYTES, BODY_MAX_CHARS, clip, plainText, type EmailText } from "./text.js";
 import { SafeError } from "./errors.js";
 
@@ -10,7 +10,8 @@ function routes(account: Account, email: Pick<EmailText, "senderContext">): Reco
     facts.previousCorrespondence || facts.sentToSameCustomDomain || facts.bimiDmarc);
   const choices: Record<string, string> = {};
   for (const label of account.labels) {
-    if (label.name !== SUSPICIOUS_LABEL) choices[`file_${label.id}`] = `File under ${label.name}: ${label.description}`;
+    if (label.name === HOLD_LABEL || label.name === SUSPICIOUS_LABEL) continue;
+    choices[`file_${label.id}`] = `File under ${label.name}: ${label.description}`;
   }
   choices.suspicious = "Archive likely phishing, impersonation or an attempt to steal credentials or money.";
   choices.deliver = "Keep in the inbox for attention, a reply, a decision, a timely update or a task. Also choose this for uncertain mail.";

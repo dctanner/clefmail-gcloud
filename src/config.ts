@@ -3,6 +3,7 @@ import { z } from "zod";
 import { SafeError } from "./errors.js";
 
 export const PROCESSED_LABEL = "Clefmail/Processed";
+export const HOLD_LABEL = "Clefmail/Hold";
 export const HELD_LABEL = "Clefmail/Held";
 export const SUSPICIOUS_LABEL = "Clefmail/Suspicious";
 const optionSchema = z.object({

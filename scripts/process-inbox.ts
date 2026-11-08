@@ -6,7 +6,7 @@ import { verifyMailbox } from "../src/gmail.js";
 import { createProcessor, gmailFor } from "../src/runtime.js";
 import type { InboxOutcome } from "../src/processor.js";
 
-const outcomes = z.enum(["archived", "inbox", "flagged", "skipped"]);
+const outcomes = z.enum(["archived", "inbox", "hold", "flagged", "skipped"]);
 const snapshotSchema = z.array(z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/));
 
 async function main() {
@@ -52,7 +52,7 @@ async function main() {
     },
     save: (id: string, outcome: InboxOutcome) => create(`results/${id}.json`, outcome),
   };
-  const counts = { archived: 0, inbox: 0, flagged: 0, skipped: 0 };
+  const counts = { archived: 0, inbox: 0, hold: 0, flagged: 0, skipped: 0 };
   log("inbox_run_started", { account: account.id, run: runName, total: ids.length, provider: config.provider.kind });
   for (const id of ids) {
     const outcome = await processor.processInboxItem(account, id, gmail, labels, journal).catch(error => {
@@ -63,7 +63,7 @@ async function main() {
       throw error;
     });
     counts[outcome]++;
-    if (outcome === "flagged") log("inbox_pitch_flagged", { account: account.id, run: runName, message: id });
+    if (outcome === "hold") log("inbox_pitch_held_for_review", { account: account.id, run: runName, message: id });
   }
   log("inbox_run_finished", { account: account.id, run: runName, total: ids.length, ...counts });
 }

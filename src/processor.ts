@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { Account } from "./config.js";
 import { archiveBlock, type Decision } from "./decision.js";
 import { errorCode, HttpError, log, SafeError } from "./errors.js";
@@ -12,6 +13,11 @@ import { isVerificationTest, type Verification } from "./verification.js";
 const TERMINAL_CLASSIFIER_ERRORS = [
   "invalid_label_answer", "invalid_probability_total", "choice_not_maximum", "ai_request_limit", "unreadable_body", "classifier_refused",
 ];
+
+export type InboxOutcome = "inbox" | "archived" | "flagged" | "skipped";
+
+type MessageRun = { mode: "live"; session: MailboxSession } |
+  { mode: "inbox"; acquire(): Promise<MailboxSession | InboxOutcome> };
 
 export interface Dependencies {
   state: StateStore;
@@ -28,8 +34,8 @@ export class Processor {
 
   private async processMessage(
     account: Account, id: string, gmail: GmailPort, labels: LabelMap,
-    session: MailboxSession, signal: AbortSignal,
-  ): Promise<void> {
+    run: MessageRun, signal: AbortSignal,
+  ): Promise<InboxOutcome | "held"> {
     signal.throwIfAborted();
     let message;
     try {
@@ -37,24 +43,26 @@ export class Processor {
     } catch (error) {
       if (!(error instanceof SafeError) || error.code !== "gmail_response_limit") throw error;
       this.log("message_skipped", { account: account.id, message: id, reason: "body_response_limit" });
-      return;
+      return "skipped";
     }
-    if (!received(message, account.email)) return;
+    const inboxRun = run.mode === "inbox";
+    const outsideInbox = (ids: string[] = []) => !ids.includes("INBOX") || ids.includes(labels.held);
+    if ((inboxRun && outsideInbox(message.labelIds)) || !received(message, account.email)) return "skipped";
     const verify = account.humanVerification || isVerificationTest(account, message);
-    const resume = verify &&
+    const resume = !inboxRun && verify &&
       await this.deps.verification?.needsResume(account, message);
-    const processed = message.labelIds?.includes(labels.processed) || await this.deps.state.isProcessed(account.id, id);
-    if (processed && !resume) return;
+    const processed = !inboxRun && (message.labelIds?.includes(labels.processed) || await this.deps.state.isProcessed(account.id, id));
+    if (processed && !resume) return "skipped";
     if (verify && !this.deps.verification) throw new SafeError("verification_not_configured");
     const email = await extract(message, attachmentId => gmail.attachment(id, attachmentId));
     if (email.bodyUnavailable || !email.body.trim()) {
       this.log("message_skipped", { account: account.id, message: id, reason: "unreadable_body" });
-      return;
+      return "skipped";
     }
-    if (resume) {
+    if (resume && run.mode === "live") {
       if (!this.deps.verification) throw new SafeError("verification_not_configured");
-      if (await this.deps.verification.quarantine(account, message, gmail, labels, session)) return;
-      if (processed) return;
+      if (await this.deps.verification.quarantine(account, message, gmail, labels, run.session)) return "held";
+      if (processed) return "skipped";
     }
     email.senderContext = await this.deps.verification?.describeSender(account, message, gmail);
     let decision: Decision;
@@ -67,7 +75,7 @@ export class Processor {
           !TERMINAL_CLASSIFIER_ERRORS.includes(error.code))
         throw error;
       this.log("message_skipped", { account: account.id, message: id, reason: error.code });
-      return;
+      return "skipped";
     }
     // Archive gates come from the extracted email itself, never from the classifier path.
     decision = {
@@ -76,9 +84,13 @@ export class Processor {
       truncated: decision.truncated || email.truncated,
     };
     signal.throwIfAborted();
+    // The bulk run takes the mailbox lease only for the final read and write.
+    // Live deliveries can proceed during inference on older messages.
+    const session = run.mode === "live" ? run.session : await run.acquire();
+    if (typeof session === "string") return session;
     const current = await gmail.message(id, "minimal");
-    if (current.labelIds?.includes(labels.processed)) return;
-    if (current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT"].includes(l))) return;
+    if (inboxRun ? outsideInbox(current.labelIds) : current.labelIds?.includes(labels.processed)) return "skipped";
+    if (current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT"].includes(l))) return "skipped";
     const sender = senderOf(message);
     // Lookup errors retry; they never mean "not a contact". This guard also
     // applies when human verification is disabled.
@@ -89,10 +101,10 @@ export class Processor {
       (decision.actionProbability ?? 0) < account.verificationThreshold);
     const checkSender = verify && !modelBypass && block !== null && !!current.labelIds?.includes("INBOX");
     this.log("message_classified", {
-      account: account.id, message: id, label: decision.label, archiveProbability: decision.archiveProbability,
+      account: account.id, message: id, source: run.mode, label: decision.label, archiveProbability: decision.archiveProbability,
       archiveBlock: block, action: decision.action, actionProbability: decision.actionProbability,
       bodyTruncated: email.truncated,
-      verificationPolicy: block === null ? "archived" : modelBypass ? "expected_mail" : checkSender ? "sender_checks" : "not_required",
+      verificationPolicy: block === null ? "archived" : modelBypass ? "expected_mail" : checkSender ? (inboxRun ? "report_only" : "sender_checks") : "not_required",
     });
     const add: string[] = [];
     if (decision.label) {
@@ -103,14 +115,68 @@ export class Processor {
     await session.assertOwned();
     signal.throwIfAborted();
     // One message-level modification, never a thread update, send, trash, or delete.
-    if (add.length || block === null) await gmail.modify(id, add, block === null ? ["INBOX"] : []);
-    if (checkSender) {
-      if (await this.deps.verification!.quarantine(account, message, gmail, labels, session, email.senderContext)) return;
+    const remove = block === null ? ["INBOX"] : [];
+    if (inboxRun && add.length) {
+      for (const category of Object.values(labels.options)) {
+        if (current.labelIds?.includes(category) && !add.includes(category)) remove.push(category);
+      }
+    }
+    if (add.length || remove.length) await gmail.modify(id, add, remove, inboxRun ? labels.options : undefined);
+    if (checkSender && !inboxRun) {
+      if (await this.deps.verification!.quarantine(account, message, gmail, labels, session, email.senderContext)) return "held";
     }
     this.log("message_processed", {
       account: account.id, message: id, label: decision.label,
       archived: block === null, archiveBlock: block, reason: decision.reason,
     });
+    if (block === null) return "archived";
+    return checkSender ? "flagged" : "inbox";
+  }
+
+  // An explicit inbox run applies current rules even to previously processed mail.
+  // Its journal is separate from the Gmail watch cursor.
+  async processInboxItem(account: Account, id: string, gmail: GmailPort, labels: LabelMap,
+    journal: { read(id: string): Promise<InboxOutcome | null>; save(id: string, outcome: InboxOutcome): Promise<void> },
+  ): Promise<InboxOutcome> {
+    if (!account.enabled) throw new SafeError("mailbox_disabled");
+    const previous = await journal.read(id);
+    if (previous) return previous;
+    let session: MailboxSession | undefined;
+    let completed: InboxOutcome | null = null;
+    const acquire = async () => {
+      if (!session) {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            session = await MailboxSession.acquire(this.deps.state, account.id, this.deps.now);
+            break;
+          } catch (error) {
+            if (errorCode(error) !== "mailbox_busy" || attempt >= 90) throw error;
+            await delay(2000 + Math.random() * 2000);
+          }
+        }
+        completed = await journal.read(id);
+      }
+      return completed ?? session;
+    };
+    try {
+      let result: InboxOutcome | "held";
+      try {
+        result = await this.processMessage(account, id, gmail, labels, { mode: "inbox", acquire }, AbortSignal.timeout(240_000));
+      } catch (error) {
+        if (!(error instanceof HttpError) || error.service !== "gmail" || error.status !== 404) throw error;
+        result = "skipped";
+      }
+      if (result === "held") throw new SafeError("unexpected_inbox_hold");
+      // Skips can finish before the final Gmail read.
+      const lock = await acquire();
+      if (typeof lock === "string") return lock;
+      await lock.assertOwned();
+      if (result !== "skipped") await this.deps.state.markProcessed(account.id, id);
+      await journal.save(id, result);
+      return result;
+    } finally {
+      await session?.release();
+    }
   }
 
   async notification(account: Account, notificationHistoryId: string): Promise<void> {
@@ -143,7 +209,7 @@ export class Processor {
           if (BigInt(record.id) <= BigInt(session.data.historyId!)) continue;
           for (const id of new Set((record.messagesAdded || []).map(m => m.message.id))) {
             try {
-              await this.processMessage(account, id, gmail, labels, session, signal);
+              await this.processMessage(account, id, gmail, labels, { mode: "live", session }, signal);
               await session.assertOwned();
               await this.deps.state.markProcessed(account.id, id);
             } catch (error) {

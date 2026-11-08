@@ -10,7 +10,7 @@ Clefmail is self-hosted on Google Cloud and supports up to ten mailboxes with se
 
 ![Clefmail reads the message and sender facts, chooses an optional topic, and routes the message to the archive, inbox or human verification.](docs/images/clefmail-flow-marker.png)
 
-Processing starts with mail received after the first Gmail watch is registered. Clefmail skips Spam, Trash, drafts and sent-only messages. Read mail and messages archived by a Gmail filter remain eligible for labeling. Each update applies to an individual message and preserves its unread status and unrelated labels.
+The Gmail watch processes mail received after it starts. During setup you can also [process the messages already in your inbox](#process-your-existing-inbox). Clefmail skips Spam, Trash, drafts and sent-only messages. Read mail and messages archived by a Gmail filter remain eligible for labeling. Each update applies to an individual message and preserves its unread status and unrelated labels.
 
 AI archiving defaults to `true`. Set `archiveEnabled: false` for labeling only. Contacts are protected from Clefmail archiving; starred and important messages are also protected from AI archiving. Human verification uses its own `humanVerification` setting, which defaults to `true`.
 
@@ -280,6 +280,20 @@ Cloud Build permissions and organization policies may require administrator setu
 
 Do **not** grant `allUsers` or `allAuthenticatedUsers` access or put an unauthenticated proxy in front of the **processor** service. Human verification uses a separately deployed public service in `SERVICE_MODE=verification`, which has no `/pubsub` or `/renew` routes; see [the verification guide](docs/VERIFICATION.md). Both trusted invoker identities can invoke both POST routes; there is no separate application login. The Cloud Run URL is not a dashboard and direct internet requests should be rejected.
 
+### Process your existing inbox
+
+After deployment, use your processor’s `PROJECT`, `REGION`, `STATE_BUCKET` and `SECRET_BINDINGS` settings. Pass the mailbox ID from `config.json` and a name for the run.
+
+```bash
+bash scripts/process-inbox.sh personal first-setup
+```
+
+This starts a Cloud Run job. It lists the messages currently in the inbox before it starts filing them, including read mail and messages Clefmail has handled before. Each eligible message goes to your configured model with the same readable body, sender history and thresholds used for new mail. Model calls and cloud usage incur charges.
+
+The job applies category labels and archives eligible messages. A new category replaces earlier configured categories on that message. If the model selects human verification, the message stays in the inbox and its ID appears in an `inbox_pitch_flagged` log entry. Only live processing sends verification emails. The job respects stars, important flags, contacts and changes you make while it runs.
+
+The private state bucket stores the message IDs and outcomes under `inbox-runs/<account>/<run>/`. The final `inbox_run_finished` log gives counts for archived messages, ordinary inbox mail, flagged pitches and skipped messages. Use the same run name to resume after an interruption. Choose a fresh name to examine the current inbox again. New mail continues through the Gmail watch.
+
 ## 7. Monitor production
 
 Read recent service logs:
@@ -330,7 +344,7 @@ Disable processing and revoke Gmail grants first. Then remove the dedicated Sche
 - **Text extraction:** HTML and plain MIME bodies use the same text cleaner. Embedded data and attachment parts are removed before the text is shortened to 12,000 characters and 16 KiB. External resources and linked pages are not fetched. Email text exists in request memory and goes to the selected provider. Logs contain opaque message/account IDs and outcome codes, not subjects or bodies.
 - **Persistent state:** Secret Manager holds credentials/configuration, Pub/Sub holds mailbox/history metadata, Storage holds cursors/watch expiry/leases and optional sender records (email address, secret verification capability, pending message IDs and completion state), and private per-message completion records prevent repeated processing. Treat the private bucket as sensitive mailbox data; there is no automatic sender-record expiration or deletion.
 - **At-least-once, not exactly-once:** crashes can repeat inference and its cost. Processing markers usually prevent repeated completed work. Verification also journals pending messages and completion stages; deterministic Message-IDs and Sent searches reduce duplicate notices, but Gmail send/contact creation is not transactional and ambiguous failures can still duplicate external effects. Removing those markers can permit reprocessing if history is replayed.
-- **No historical recovery:** an expired history cursor is reset to the current baseline; missed mail is not recovered. A failed message can delay subsequent history until retry; notifications can eventually dead-letter. No automatic dead-letter replay, inbox scan, reconciliation job or backfill is provided.
+- **No historical recovery:** an expired history cursor is reset to the current baseline; missed mail is not recovered. A failed message can delay subsequent history until retry; notifications can eventually dead-letter. Use the owner-run inbox job to classify messages still in the inbox after a gap.
 - **Concurrent edits:** Gmail offers no conditional label transaction. A small race with your manual Gmail changes remains unavoidable.
 - **Provider policies:** review the selected model provider's retention/processing terms and Google's Limited Use requirements. No blanket zero-retention, compliance or accuracy claim is made.
 
@@ -352,7 +366,7 @@ bun run check:full  # all three
 | `src/processor.ts`, `src/state.ts` | History processing, watch renewal and storage leases |
 | `src/handler.ts`, `src/server.ts` | Private Pub/Sub/renewal endpoints and isolated public service mode |
 | `src/verification.ts`, `src/verification-handler.ts`, `src/sender.ts` | Sender quarantine state, Turnstile page/validation, completion and sender parsing |
-| `scripts/` | OAuth, label setup, sample preview and explicit deployment |
+| `scripts/` | OAuth, label setup, inbox processing, sample preview and deployment |
 | `tests/` | Synthetic provider, processing, storage and deployment tests |
 
 ## Provider documentation

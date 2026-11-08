@@ -31,7 +31,7 @@ export interface GmailPort {
   message(id: string, format?: MessageFormat): Promise<Message>;
   attachment(message: string, id: string): Promise<{ data: string; size?: number }>;
   labels(account: Account, create?: boolean): Promise<LabelMap>;
-  modify(id: string, add: string[], remove: string[]): Promise<void>;
+  modify(id: string, add: string[], remove: string[], categories?: LabelMap["options"]): Promise<void>;
   watch(topic: string): Promise<{ historyId: string; expiration: string }>;
   hasContact(email: string): Promise<boolean>;
   addContact(email: string): Promise<void>;
@@ -115,6 +115,26 @@ export class Gmail implements GmailPort {
     return historyPageSchema.parse(await this.call(`history?${query}`));
   }
 
+  async inboxSnapshot(): Promise<string[]> {
+    const query = new URLSearchParams({
+      labelIds: "INBOX", q: `before:${Math.ceil(Date.now() / 1000)}`,
+      maxResults: "500", fields: "messages(id),nextPageToken",
+    });
+    const ids = new Set<string>();
+    const tokens = new Set<string>();
+    for (;;) {
+      const page = z.object({
+        messages: z.array(z.object({ id: messageId })).default([]),
+        nextPageToken: z.string().min(1).optional(),
+      }).parse(await this.call(`messages?${query}`));
+      for (const message of page.messages) ids.add(message.id);
+      if (!page.nextPageToken) return [...ids];
+      if (tokens.has(page.nextPageToken)) throw new SafeError("repeated_inbox_page");
+      tokens.add(page.nextPageToken);
+      query.set("pageToken", page.nextPageToken);
+    }
+  }
+
   async message(id: string, format: MessageFormat = "full"): Promise<Message> {
     messageId.parse(id);
     const query = new URLSearchParams({
@@ -173,11 +193,11 @@ export class Gmail implements GmailPort {
     return { processed, held, options };
   }
 
-  async modify(id: string, add: string[], remove: string[]): Promise<void> {
+  async modify(id: string, add: string[], remove: string[], categories?: LabelMap["options"]): Promise<void> {
     messageId.parse(id);
     // Defense in depth: no caller may mutate system labels other than removing INBOX.
     if (!add.length || add.some(l => !/^Label_[a-zA-Z0-9_-]+$/.test(l)) ||
-        remove.some(l => l !== "INBOX"))
+        remove.some(l => l !== "INBOX" && !(/^Label_[a-zA-Z0-9_-]+$/.test(l) && Object.values(categories || {}).includes(l))))
       throw new SafeError("unsafe_label_mutation");
     await this.call(`messages/${encodeURIComponent(id)}/modify`, {
       addLabelIds: [...new Set(add)],

@@ -251,3 +251,56 @@ test("private marker failures preserve the history cursor for retry", async () =
   expect(f.state.snapshot!.data.historyId).toBe("200");
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
 });
+
+function inboxJournal() {
+  const results = new Map<string, import("../src/processor.js").InboxOutcome>();
+  return {
+    read: async (id: string) => results.get(id) ?? null,
+    save: async (id: string, value: import("../src/processor.js").InboxOutcome) => { results.set(id, value); },
+  };
+}
+
+test("inbox run reclassifies old markers, replaces only configured categories and resumes by ID", async () => {
+  const f = fixture();
+  const j = inboxJournal();
+  f.gmail.labelMap.options.news = "Label_news";
+  f.gmail.messages.set("a1", message("a1", ["INBOX", "UNREAD", "Label_news", "Label_personal", "Label_done"]));
+  await f.state.markProcessed(account.id, "a1");
+  const run = () => f.processor.processInboxItem(account, "a1", f.gmail, f.gmail.labelMap, j);
+  expect(await run()).toBe("archived");
+  expect(await run()).toBe("archived");
+  expect(f.count()).toBe(1);
+  expect(f.state.snapshot!.data.historyId).toBe("100");
+  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["UNREAD", "Label_personal", "Label_done", "Label_receipts"]);
+});
+
+test("old pitches are reported in the inbox without a hold or a notice", async () => {
+  const f = fixture();
+  const verification = {
+    describeSender: async () => undefined,
+    needsResume: async () => { throw Error("unexpected resume"); },
+    quarantine: async () => { throw Error("unexpected hold"); },
+  } as unknown as import("../src/verification.js").Verification;
+  const processor = new Processor({ ...f.deps, verification, classify: async () => ({ ...decision, archive: false }) });
+  const result = await processor.processInboxItem({ ...account, humanVerification: true }, "a1", f.gmail, f.gmail.labelMap, inboxJournal());
+  expect(result).toBe("flagged");
+  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["INBOX", "Label_receipts"]);
+  expect(f.gmail.notices).toEqual([]);
+});
+
+test("inbox run skips unreadable bodies and rechecks inbox membership after inference", async () => {
+  const f = fixture();
+  const m = message();
+  m.payload!.body = {};
+  f.gmail.messages.set("a1", m);
+  expect(await f.processor.processInboxItem(account, "a1", f.gmail, f.gmail.labelMap, inboxJournal())).toBe("skipped");
+  expect(f.count()).toBe(0);
+  f.gmail.messages.set("a1", message());
+  const processor = new Processor({ ...f.deps, classify: async () => {
+    expect(f.state.snapshot?.data.lease).toBeUndefined();
+    f.gmail.messages.get("a1")!.labelIds = ["Label_personal"];
+    return decision;
+  } });
+  expect(await processor.processInboxItem(account, "a1", f.gmail, f.gmail.labelMap, inboxJournal())).toBe("skipped");
+  expect(f.gmail.modifications).toEqual([]);
+});

@@ -169,3 +169,21 @@ test("OpenAI refusals and malformed choice distributions cannot trigger a Gmail 
     await expect(client.classify(account, email)).rejects.toThrow(error);
   }
 });
+
+test("inbox snapshot applies a fixed time boundary and deduplicates IDs across pages", async () => {
+  const pages: URL[] = [];
+  const client = new Gmail({ clientId: "id", clientSecret: "secret", refreshToken: "refresh" }, undefined,
+    stub(url => {
+      if (url.includes("oauth2")) return json({ access_token: "access", expires_in: 3600 });
+      const page = new URL(url);
+      pages.push(page);
+      return page.searchParams.has("pageToken")
+        ? json({ messages: [{ id: "a" }, { id: "b" }] })
+        : json({ messages: [{ id: "a" }], nextPageToken: "p2" });
+    }));
+  expect(await client.inboxSnapshot()).toEqual(["a", "b"]);
+  expect(pages.map(url => url.searchParams.get("labelIds"))).toEqual(["INBOX", "INBOX"]);
+  expect(pages[0].searchParams.get("q")).toMatch(/^before:\d+$/);
+  expect(pages[1].searchParams.get("q")).toBe(pages[0].searchParams.get("q"));
+  await expect(client.modify("ab", ["Label_receipts"], ["Label_user"], { receipts: "Label_receipts" })).rejects.toThrow("unsafe_label_mutation");
+});

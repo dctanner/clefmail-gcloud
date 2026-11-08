@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { Classifier } from "../src/classifier.js";
-import { env, loadConfig } from "../src/config.js";
+import { loadConfig } from "../src/config.js";
 import { errorCode, log } from "../src/errors.js";
 
 // Explicit local preview: sends only the supplied text to the selected provider.
@@ -14,7 +14,7 @@ async function main() {
   const bytes = await readFile(path);
   if (bytes.length > 262_144) throw new Error("Sample too large");
   const text = bytes.toString("utf8");
-  const result = await new Classifier(config.provider, env("CLASSIFIER_API_KEY")).classify(account, {
+  const result = await new Classifier(config.provider).classify(account, {
     from: "", to: "", subject: "", receivedAt: "",
     body: text, truncated: false, bodyUnavailable: !text.trim(), originalBytes: bytes.length,
   });

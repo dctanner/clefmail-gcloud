@@ -14,13 +14,15 @@ SERVICE="${SERVICE:-clefmail-gcloud}"
 IFS=',' read -ra bindings <<< "$SECRET_BINDINGS"
 for binding in "${bindings[@]}"; do
   # Only the application's credential names: never NODE_OPTIONS, PATH, STATE_BUCKET, etc.
-  [[ "$binding" =~ ^(/secrets/config\.json|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLASSIFIER_API_KEY|GMAIL_[A-Z0-9_]+_REFRESH_TOKEN)=([a-zA-Z0-9_-]+):([1-9][0-9]*)$ ]] ||
+  [[ "$binding" =~ ^(/secrets/config\.json|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLASSIFIER_API_KEY|OPENAI_API_KEY|GMAIL_[A-Z0-9_]+_REFRESH_TOKEN)=([a-zA-Z0-9_-]+):([1-9][0-9]*)$ ]] ||
     { echo "Use NAME=secret:version or /secrets/config.json=secret:version (numeric versions, known names only)." >&2; exit 1; }
   name="${binding%%=*}"
   [[ ",${seen:-}," != *",${name},"* ]] || { echo "Duplicate secret binding: ${name}" >&2; exit 1; }
   seen="${seen:-}${seen:+,}${name}"
 done
-for required in /secrets/config.json GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLASSIFIER_API_KEY; do
+[[ ",${seen}," == *,CLASSIFIER_API_KEY,* || ",${seen}," == *,OPENAI_API_KEY,* ]] ||
+  { echo "Bind the API key for your configured classifier." >&2; exit 1; }
+for required in /secrets/config.json GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   [[ ",${SECRET_BINDINGS}," == *",${required}="* ]] ||
     { echo "Missing required secret binding: ${required}" >&2; exit 1; }
 done

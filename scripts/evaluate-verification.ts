@@ -1,12 +1,12 @@
 // Explicit model evaluation using fictional messages; sends no email.
-import { loadConfig, env } from "../src/config.js";
+import { loadConfig } from "../src/config.js";
 import { Classifier } from "../src/classifier.js";
 import type { Decision } from "../src/decision.js";
 import type { SenderContext } from "../src/sender-context.js";
 import { readFile } from "node:fs/promises";
 const cases: { name: string; expected: boolean | Decision["action"]; subject: string; body: string; from?: string; senderContext?: Partial<SenderContext> }[] = JSON.parse(await readFile(new URL("../tests/fixtures/verification-cases.json", import.meta.url), "utf8"));
 const config = await loadConfig();
-const model = new Classifier(config.provider, env("CLASSIFIER_API_KEY"));
+const model = new Classifier(config.provider);
 let failures = 0;
 for (const c of cases) {
   const decision = await model.classify(config.accounts[0]!, {

@@ -1,3 +1,4 @@
+import { openaiPrompt } from "../src/openai-decisions.js";
 import { expect, test } from "bun:test";
 import { archiveBlock, decide, request } from "../src/decision.js";
 import { configSchema } from "../src/config.js";
@@ -96,5 +97,8 @@ test("body truncation respects JSON escaping and remaining request space", () =>
     expect(input.state.truncated).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(input))).toBeLessThanOrEqual(65_536);
     expect(Buffer.byteLength(input.state.body)).toBeLessThanOrEqual(16_384);
+    const native = openaiPrompt(request(configured, {...email, body:text}, "gpt-6-luna", openaiPrompt));
+    expect(native.input[0]!.content[0]!.data.body.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(JSON.stringify(native))).toBeLessThanOrEqual(65_536);
   }
 });

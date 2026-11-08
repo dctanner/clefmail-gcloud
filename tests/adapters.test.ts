@@ -132,3 +132,40 @@ test("label creation reads back missing type and rejects a system label", async 
     }
   }
 });
+
+test("OpenAI Decisions sends one bounded request and routes by the chosen probability", async () => {
+  const trusted = { ...email, senderContext: { ownAddress: false, contact: true, previousCorrespondence: false,
+    verified: false, pendingVerification: false, sentToSameCustomDomain: false, bimiDmarc: false, verificationTest: false } };
+  let calls = 0;
+  const classifier = new Classifier({ kind: "openai", model: "gpt-6-luna" }, "openai-key", stub((url, init) => {
+    calls++;
+    expect(url).toBe("https://api.openai.com/v1/decisions");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer openai-key");
+    const payload = JSON.parse(String(init.body));
+    expect(payload.model).toBe("gpt-6-luna");
+    expect(payload.input[0].content[0]).toMatchObject({ type: "input_json", data: { body: email.body, senderContext: trusted.senderContext } });
+    expect(payload.questions.map((q: any) => q.name)).toEqual(["label", "action"]);
+    expect(payload.questions[1].choices.map((c: any) => c.value)).toEqual(["archive", "deliver"]);
+    return json({ model: payload.model, answers: [
+      { type: "choice", name: "action", choice: "archive", confidence: .99, probabilities: [
+        { value: "archive", probability: .94 }, { value: "deliver", probability: .06 }] },
+      { type: "choice", name: "label", choice: "receipts", confidence: .98, probabilities: [
+        { value: "receipts", probability: .96 }, { value: "no_match", probability: .04 }] },
+    ] });
+  }));
+  expect(await classifier.classify(account, trusted)).toMatchObject({label: "receipts", action: "archive", archive: false, actionProbability: .94});
+  expect(calls).toBe(1);
+});
+
+test("OpenAI refusals and malformed choice distributions cannot trigger a Gmail action", async () => {
+  const choice = {type: "choice", name: "label", choice: "receipts", confidence: 1,
+    probabilities: [{value: "receipts", probability: 1}, {value: "no_match", probability: 0}]};
+  for (const [answers, error] of [
+    [[choice, {name: "action", type: "refusal"}], "classifier_refused"],
+    [[choice, choice], "invalid_openai_answers"],
+    [[choice, {...choice, name: "action", probabilities: [choice.probabilities[0], choice.probabilities[0]]}], "invalid_action_answer"],
+  ] as const) {
+    const client = new Classifier({kind: "openai",model: "gpt-6-luna"}, "key", stub(() => json({model: "gpt-6-luna", answers})));
+    await expect(client.classify(account, email)).rejects.toThrow(error);
+  }
+});

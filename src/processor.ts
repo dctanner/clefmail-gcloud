@@ -10,7 +10,7 @@ import { isVerificationTest, type Verification } from "./verification.js";
 // Deterministic per-message outcomes: retrying cannot succeed, so abstain instead of
 // blocking every later message in the mailbox.
 const TERMINAL_CLASSIFIER_ERRORS = [
-  "invalid_label_answer", "invalid_probability_total", "choice_not_maximum", "ai_request_limit", "unreadable_body",
+  "invalid_label_answer", "invalid_probability_total", "choice_not_maximum", "ai_request_limit", "unreadable_body", "classifier_refused",
 ];
 
 export interface Dependencies {

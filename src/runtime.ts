@@ -14,7 +14,7 @@ export function gmailFor(account: Account, signal?: AbortSignal): Gmail {
 }
 
 export function createProcessor(config: Config): Processor {
-  const classifier = new Classifier(config.provider, env("CLASSIFIER_API_KEY"));
+  const classifier = new Classifier(config.provider);
   return new Processor({
     state: new GcsStateStore(env("STATE_BUCKET")),
     gmail: gmailFor,

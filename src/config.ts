@@ -46,6 +46,10 @@ export const configSchema = z.object({
       accountId: z.string().regex(/^[a-f0-9]{32}$/),
     }).strict(),
     z.object({
+      kind: z.literal("openai"),
+      model: z.literal("gpt-6-luna").default("gpt-6-luna"),
+    }).strict(),
+    z.object({
       kind: z.literal("jev"),
       model: z.string().regex(/^jev-[a-zA-Z0-9._-]{1,80}$/).default("jev-latest"),
     }).strict(),

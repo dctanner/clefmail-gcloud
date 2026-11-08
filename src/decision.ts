@@ -27,7 +27,13 @@ export function allowedActions(email: Pick<EmailText, "senderContext">): Action[
   return trusted ? ["archive", "deliver"] : ["archive", "deliver", "verify"];
 }
 
-export function request(account: Account, email: EmailText, model: string) {
+export interface DecisionPrompt {
+  model: string;
+  state: EmailText;
+  questions: Record<"label" | "action", { type: "choice"; instructions: string; criteria: Record<string, string> }>;
+}
+
+export function request(account: Account, email: EmailText, model: string, wireFormat?: (prompt: DecisionPrompt) => unknown) {
   if (email.bodyUnavailable || !email.body.trim()) throw new SafeError("unreadable_body");
   const content = plainText(email.body);
   if (!content.text) throw new SafeError("unreadable_body");
@@ -40,7 +46,7 @@ export function request(account: Account, email: EmailText, model: string) {
     deliver: `Keep direct requests, tasks awaiting the owner and personal messages needing attention in the inbox, even when the label is no_match. Deliver requests for a decision, approval, help or a reply. This includes the next step in an existing project, booking, service visit or personal arrangement, even from someone emailing the owner for the first time. An unsolicited pitch asking for a meeting still follows the cold outreach policy. Also deliver useful mail needing inbox attention from a first-time sender, including login codes, confirmation links, password resets, security notices, invoices with an outstanding payment or due date, payment failures, service failures, appointment reminders, actionable support replies or personal correspondence. Expected mail includes ${EXPECTED_MAIL}. Missing sender history is normal for service mail. Trusted senders and company domains can deliver any mail that needs inbox attention.`,
     verify: "Cold outreach from an unknown sender. The body shows an unsolicited attempt to sell, recruit, solicit a favour, or deceive the owner. Examples include a first sales pitch asking for a demo and an unsolicited offer asking for payment.",
   };
-  const input = {
+  const input: DecisionPrompt = {
     model,
     state: { ...email, body: "" },
     questions: {
@@ -60,7 +66,7 @@ Classify the message's purpose; you do not need proof of a prior relationship fo
       },
     },
   };
-  const bodyBudget = 65_536 - Buffer.byteLength(JSON.stringify(input));
+  const bodyBudget = 65_536 - Buffer.byteLength(JSON.stringify(wireFormat ? wireFormat(input) : input));
   input.state.body = clip(content.text, BODY_MAX_CHARS, BODY_MAX_BYTES, bodyBudget).trimEnd();
   if (!input.state.body.trim()) throw new SafeError("ai_request_limit");
   input.state.truncated ||= content.truncated || input.state.body !== content.text;

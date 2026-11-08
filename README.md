@@ -1,6 +1,6 @@
 # Clefmail for Google Cloud
 
-Clefmail organizes new Gmail messages as they arrive. It uses Clef or Jev to choose a label from your rules, with optional archiving for mail that needs no inbox attention. You keep using Gmail, where the labels and messages appear.
+Clefmail organizes new Gmail messages as they arrive. It uses Clef, Jev or OpenAI Decisions to choose a label from your rules, with optional archiving for mail that needs no inbox attention. You keep using Gmail, where the labels and messages appear.
 
 AI archiving and human verification are enabled by default. Classification and archiving run first. Messages archived under your rules skip human verification. Requests and personal messages that need your attention go to the inbox. When Clef selects human verification for cold outreach from an unknown sender, Clefmail holds the message and emails the sender a link. Once they complete the check, their held mail returns to your inbox and they become a Google Contact.
 
@@ -147,6 +147,12 @@ Replace the placeholder with your real Cloudflare account ID. Put the correspond
 ```
 
 Put your TypeSafe API key in `.env` as `CLASSIFIER_API_KEY`. Prefer a pinned, available Jev version for predictable behavior. There is no cross-provider fallback and no Vercel AI Gateway dependency.
+
+**OpenAI Decisions**
+
+Set `"provider": {"kind": "openai"}` and put the OpenAI key in `OPENAI_API_KEY`. The processor asks the topic and routing questions together using `gpt-6-luna`. Sender trust and routing thresholds apply to the returned choice probabilities. A refusal skips that message. See the [OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions).
+
+For Cloud Run, create a secret containing the OpenAI key and use `OPENAI_API_KEY=your-secret:1` for the classifier binding in the private service deployment command below.
 
 Other optional account settings (remove `margin` from older configurations):
 

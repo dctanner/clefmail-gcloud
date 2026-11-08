@@ -21,18 +21,17 @@ const choice = z.object({
 });
 
 export function openaiAnswers(raw: unknown) {
-  const envelope = z.object({ model: z.string(), answers: z.array(z.object({
-    name: z.enum(["label", "action"]), type: z.string(),
-  }).passthrough()).length(2) }).safeParse(raw);
-  if (!envelope.success || new Set(envelope.data.answers.map(a => a.name)).size !== 2)
-    throw new SafeError("invalid_openai_answers");
-  const answers = Object.fromEntries(envelope.data.answers.map(answer => {
-    if (answer.type === "refusal") throw new SafeError("classifier_refused");
-    const parsed = choice.safeParse(answer);
-    if (!parsed.success || new Set(parsed.data.probabilities.map(p => p.value)).size !== parsed.data.probabilities.length)
-      throw new SafeError(`invalid_${answer.name}_answer`);
-    const { probabilities, ...rest } = parsed.data;
-    return [answer.name, { ...rest, probabilities: Object.fromEntries(probabilities.map(p => [p.value, p.probability])) }];
-  }));
-  return { model: envelope.data.model, answers };
+  const envelope = z.object({ model: z.string(), answers: z.tuple([z.object({
+    name: z.literal("route"), type: z.string(),
+  }).passthrough()]) }).safeParse(raw);
+  if (!envelope.success) throw new SafeError("invalid_openai_answers");
+  const answer = envelope.data.answers[0];
+  if (answer.type === "refusal") throw new SafeError("classifier_refused");
+  const parsed = choice.safeParse(answer);
+  if (!parsed.success || new Set(parsed.data.probabilities.map(p => p.value)).size !== parsed.data.probabilities.length)
+    throw new SafeError("invalid_route_answer");
+  const { probabilities, ...rest } = parsed.data;
+  return { model: envelope.data.model, answers: { route: {
+    ...rest, probabilities: Object.fromEntries(probabilities.map(p => [p.value, p.probability])),
+  } } };
 }

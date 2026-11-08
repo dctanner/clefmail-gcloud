@@ -10,12 +10,12 @@
       "refreshTokenEnv": "GMAIL_PERSONAL_REFRESH_TOKEN",
       "archiveEnabled": true,
       "humanVerification": true,
-      "prompt": "Choose a topic label when the content fits. Use no_match for personal correspondence and requests that have no matching topic. Deliver direct requests, tasks awaiting my input and personal messages needing my attention. Archive routine mail that needs no response, task or inbox attention, including paid receipts and newsletters.",
+      "prompt": "File routine mail I can read later. Deliver personal messages, requests that need my reply, security alerts, login codes and outstanding tasks. Ask completely new senders to verify unsolicited cold pitches.",
       "labels": [
         {
           "id": "receipts",
           "name": "Clefmail/Receipts",
-          "description": "Purchase confirmations, invoices, and transaction records."
+          "description": "Paid receipts, completed transactions, refund confirmations and purchase records that need no action."
         },
         {
           "id": "newsletters",
@@ -25,12 +25,12 @@
         {
           "id": "notifications",
           "name": "Clefmail/Notifications",
-          "description": "Automated account, delivery, security, system, and support status updates, confirmations, and login codes."
+          "description": "Routine account and service updates, delivery confirmations and resolved support cases that need no attention."
         },
         {
           "id": "promotions",
           "name": "Clefmail/Promotions",
-          "description": "Marketing campaigns, retail offers, discounts, sales pitches, product promotions, and event advertising."
+          "description": "Mass marketing, product announcements, retail offers and event advertising suitable for filing."
         }
       ],
       "verificationThreshold": 0.75

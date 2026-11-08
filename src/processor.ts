@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Account } from "./config.js";
-import { archiveBlock, type Decision } from "./decision.js";
+import type { Decision } from "./decision.js";
 import { errorCode, HttpError, log, SafeError } from "./errors.js";
 import { type GmailPort, type LabelMap, verifyMailbox } from "./gmail.js";
 import { MailboxSession, type StateStore } from "./state.js";
@@ -11,7 +11,7 @@ import { isVerificationTest, type Verification } from "./verification.js";
 // Deterministic per-message outcomes: retrying cannot succeed, so abstain instead of
 // blocking every later message in the mailbox.
 const TERMINAL_CLASSIFIER_ERRORS = [
-  "invalid_label_answer", "invalid_probability_total", "choice_not_maximum", "ai_request_limit", "unreadable_body", "classifier_refused",
+  "invalid_route_answer", "ai_request_limit", "unreadable_body", "classifier_refused",
 ];
 
 export type InboxOutcome = "inbox" | "archived" | "flagged" | "skipped";
@@ -77,12 +77,6 @@ export class Processor {
       this.log("message_skipped", { account: account.id, message: id, reason: error.code });
       return "skipped";
     }
-    // Archive gates come from the extracted email itself, never from the classifier path.
-    decision = {
-      ...decision,
-      bodyUnavailable: decision.bodyUnavailable || email.bodyUnavailable,
-      truncated: decision.truncated || email.truncated,
-    };
     signal.throwIfAborted();
     // The bulk run takes the mailbox lease only for the final read and write.
     // Live deliveries can proceed during inference on older messages.
@@ -91,45 +85,42 @@ export class Processor {
     const current = await gmail.message(id, "minimal");
     if (inboxRun ? outsideInbox(current.labelIds) : current.labelIds?.includes(labels.processed)) return "skipped";
     if (current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT"].includes(l))) return "skipped";
-    const sender = senderOf(message);
-    // Lookup errors retry; they never mean "not a contact". This guard also
-    // applies when human verification is disabled.
-    const protectedSender = !sender || sender === account.email || (email.senderContext?.contact ?? await gmail.hasContact(sender)) ||
-      !!(account.humanVerification && email.senderContext?.verified);
-    const block = protectedSender ? "protected_sender" : archiveBlock(decision, account, current.labelIds || []);
-    const modelBypass = !isVerificationTest(account, message) && (decision.action !== "verify" ||
-      (decision.actionProbability ?? 0) < account.verificationThreshold);
-    const checkSender = verify && !modelBypass && block !== null && !!current.labelIds?.includes("INBOX");
+    const currentLabels = current.labelIds || [];
+    const inInbox = currentLabels.includes("INBOX");
+    const test = isVerificationTest(account, message);
+    let label = !test && decision.action === "file" ? decision.label : null;
+    if (label && inInbox && account.archiveEnabled) {
+      const sender = senderOf(message);
+      if (currentLabels.includes("STARRED") || !sender || sender === account.email ||
+          (email.senderContext?.contact ?? await gmail.hasContact(sender)) ||
+          (account.humanVerification && email.senderContext?.verified)) label = null;
+    }
+    const archive = !!label && account.archiveEnabled && inInbox;
+    const checkSender = verify && inInbox && (test || decision.action === "verify");
     this.log("message_classified", {
-      account: account.id, message: id, source: run.mode, label: decision.label, archiveProbability: decision.archiveProbability,
-      archiveBlock: block, action: decision.action, actionProbability: decision.actionProbability,
-      provider: decision.provider ?? null, model: decision.model ?? null, bodyTruncated: email.truncated,
-      verificationPolicy: block === null ? "archived" : modelBypass ? "expected_mail" : checkSender ? (inboxRun ? "report_only" : "sender_checks") : "not_required",
+      account: account.id, message: id, source: run.mode, label, action: decision.action,
+      actionProbability: decision.actionProbability, provider: decision.provider ?? null,
+      model: decision.model ?? null, bodyTruncated: email.truncated,
+      verificationPolicy: checkSender ? (inboxRun ? "report_only" : "sender_checks") : "not_required",
     });
-    const add: string[] = [];
-    if (decision.label) {
-      const selected = labels.options[decision.label];
-      if (!selected) throw new SafeError("unmapped_label");
-      add.push(selected);
+    const selected = label ? labels.options[label] : undefined;
+    if (label && !selected) throw new SafeError("unmapped_label");
+    const add = selected && (archive || !currentLabels.includes(selected)) ? [selected] : [];
+    const remove = archive ? ["INBOX"] : [];
+    // A delivered message may still carry one of our categories from an older run.
+    for (const category of Object.values(labels.options)) {
+      if (category !== selected && currentLabels.includes(category)) remove.push(category);
     }
     await session.assertOwned();
     signal.throwIfAborted();
-    // One message-level modification, never a thread update, send, trash, or delete.
-    const remove = block === null ? ["INBOX"] : [];
-    if (inboxRun && add.length) {
-      for (const category of Object.values(labels.options)) {
-        if (current.labelIds?.includes(category) && !add.includes(category)) remove.push(category);
-      }
-    }
-    if (add.length || remove.length) await gmail.modify(id, add, remove, inboxRun ? labels.options : undefined);
+    if (add.length || remove.length) await gmail.modify(id, add, remove, labels.options);
     if (checkSender && !inboxRun) {
       if (await this.deps.verification!.quarantine(account, message, gmail, labels, session, email.senderContext)) return "held";
     }
     this.log("message_processed", {
-      account: account.id, message: id, label: decision.label,
-      archived: block === null, archiveBlock: block, reason: decision.reason,
+      account: account.id, message: id, label, archived: archive, reason: decision.reason,
     });
-    if (block === null) return "archived";
+    if (archive) return "archived";
     return checkSender ? "flagged" : "inbox";
   }
 
@@ -145,12 +136,13 @@ export class Processor {
     let completed: InboxOutcome | null = null;
     const acquire = async () => {
       if (!session) {
-        for (let attempt = 0; ; attempt++) {
+        const deadline = Date.now() + 330_000;
+        for (;;) {
           try {
             session = await MailboxSession.acquire(this.deps.state, account.id, this.deps.now);
             break;
           } catch (error) {
-            if (errorCode(error) !== "mailbox_busy" || attempt >= 90) throw error;
+            if (errorCode(error) !== "mailbox_busy" || Date.now() >= deadline) throw error;
             await delay(2000 + Math.random() * 2000);
           }
         }
@@ -161,7 +153,7 @@ export class Processor {
     try {
       let result: InboxOutcome | "held";
       try {
-        result = await this.processMessage(account, id, gmail, labels, { mode: "inbox", acquire }, AbortSignal.timeout(240_000));
+        result = await this.processMessage(account, id, gmail, labels, { mode: "inbox", acquire }, AbortSignal.timeout(600_000));
       } catch (error) {
         if (!(error instanceof HttpError) || error.service !== "gmail" || error.status !== 404) throw error;
         result = "skipped";

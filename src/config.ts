@@ -22,7 +22,8 @@ export const accountSchema = z.object({
   humanVerificationTest: z.boolean().default(false),
   probability: z.number().min(0.5).max(1).default(0.75),
   verificationThreshold: z.number().min(0.5).max(1).default(0.75),
-  archiveThreshold: z.number().min(0.5).max(1).default(0.95),
+  // Accepted for older configurations. A filing category now includes archiving.
+  archiveThreshold: z.number().min(0.5).max(1).optional(),
   labels: z.array(optionSchema).min(1).max(20),
 }).strict().superRefine((v, ctx) => {
   for (const key of ["id", "name"] as const) {

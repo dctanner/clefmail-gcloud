@@ -195,8 +195,8 @@ export class Gmail implements GmailPort {
 
   async modify(id: string, add: string[], remove: string[], categories?: LabelMap["options"]): Promise<void> {
     messageId.parse(id);
-    // Defense in depth: no caller may mutate system labels other than removing INBOX.
-    if (!add.length || add.some(l => !/^Label_[a-zA-Z0-9_-]+$/.test(l)) ||
+    // Removal-only updates clear stale filing categories on delivery.
+    if ((!add.length && (!remove.length || remove.includes("INBOX"))) || add.some(l => !/^Label_[a-zA-Z0-9_-]+$/.test(l)) ||
         remove.some(l => l !== "INBOX" && !(/^Label_[a-zA-Z0-9_-]+$/.test(l) && Object.values(categories || {}).includes(l))))
       throw new SafeError("unsafe_label_mutation");
     await this.call(`messages/${encodeURIComponent(id)}/modify`, {

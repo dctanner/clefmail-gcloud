@@ -6,7 +6,7 @@ import { Processor } from "../src/processor.js";
 import { createVerificationHandler } from "../src/verification-handler.js";
 import { digest, Verification, type SenderRecord, type SenderSnapshot, type SenderStore } from "../src/verification.js";
 import { address, mayChallenge, senderOf } from "../src/sender.js";
-import { account, decision, FakeGmail, MemoryState, message } from "./helpers.js";
+import { account, decision, verifyDecision, FakeGmail, MemoryState, message } from "./helpers.js";
 
 class MemorySenders implements SenderStore {
   values = new Map<string, SenderSnapshot>();
@@ -22,7 +22,7 @@ const protectedAccount = accountSchema.parse({ ...account, humanVerification: tr
 const settings = { publicUrl: "https://verify.example.com", siteKey: "synthetic-key" };
 const config = configSchema.parse({ provider: { kind: "jev" }, verification: settings, accounts: [protectedAccount] });
 
-function fixture(classify = async () => decision, bimi = { allows: async (_message: unknown) => false }) {
+function fixture(classify = async () => verifyDecision, bimi = { allows: async (_message: unknown) => false }) {
   const state = new MemoryState(), senders = new MemorySenders(), gmail = new FakeGmail();
   let classified = 0;
   const verification = new Verification({ state, senders, gmail: () => gmail, publicUrl: settings.publicUrl, bimi });
@@ -38,7 +38,7 @@ async function next(f: ReturnType<typeof fixture>, id: string, cursor = "250") {
   await f.processor.notification(protectedAccount, cursor);
 }
 
-test("new sender labeled before challenge; each new message is classified before being held", async () => {
+test("new sender held before challenge; each new message is classified before being held", async () => {
   const f = fixture();
   const send = f.gmail.sendNotice.bind(f.gmail);
   f.gmail.sendNotice = async (...args) => {
@@ -56,11 +56,11 @@ test("new sender labeled before challenge; each new message is classified before
   expect(f.gmail.notices).toHaveLength(1);
   expect((await f.record()).pending).toHaveLength(2);
   expect(f.classified()).toBe(2);
-  expect(f.gmail.messages.get("a2")!.labelIds).toContain("Label_receipts");
+  expect(f.gmail.messages.get("a2")!.labelIds).not.toContain("Label_receipts");
 });
 
-test("AI-archived mail skips sender verification entirely", async () => {
-  const f = fixture();
+test("filed mail skips sender verification entirely", async () => {
+  const f = fixture(async () => decision);
   await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
   expect(f.classified()).toBe(1);
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
@@ -71,11 +71,11 @@ test("AI-archived mail skips sender verification entirely", async () => {
   expect(f.senders.values.size).toBe(0);
 });
 
-test("mail kept by the model is labeled before the sender challenge", async () => {
-  const f = fixture(async () => ({ ...decision, archive: false }));
+test("cold outreach receives only the held label", async () => {
+  const f = fixture();
   const send = f.gmail.sendNotice.bind(f.gmail);
   f.gmail.sendNotice = async (...args) => {
-    expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+    expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_receipts");
     await send(...args);
   };
   await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
@@ -105,8 +105,8 @@ test("failed sender context lookup retries before classification or labeling", a
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_held");
 });
 
-test("mail already outside the inbox is labeled without a sender challenge", async () => {
-  const f = fixture();
+test("filtered mail can receive a filing category outside the inbox", async () => {
+  const f = fixture(async () => decision);
   f.gmail.messages.set("a1", message("a1", []));
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
@@ -145,7 +145,7 @@ test("existing contacts are never AI-archived even when verification is disabled
 });
 
 test("prior correspondents bypass verification and retain ordinary classifier policy", async () => {
-  const f = fixture(); f.gmail.corresponded = true;
+  const f = fixture(async () => decision); f.gmail.corresponded = true;
   await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
   expect(f.classified()).toBe(1);
   expect(f.gmail.notices).toHaveLength(0);
@@ -372,8 +372,8 @@ test("production defaults enable archiving and verification with diagnostics off
 });
 
 
-test("BIMI exemption keeps category without creating contact, challenge or sender trust", async () => {
-  const f = fixture(undefined, { allows: async () => true });
+test("BIMI exemption bypasses verification without creating a contact", async () => {
+  const f = fixture(async () => decision, { allows: async () => true });
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
@@ -405,7 +405,7 @@ test("BIMI exemption is per message and can release its own interrupted hold", a
 });
 
 test("expected account mail reaches inbox without a challenge or permanent sender trust", async () => {
-  const f = fixture(async () => ({ ...decision, label: null, archive: false, action: "deliver" as const, actionProbability: 0.99 }));
+  const f = fixture(async () => ({ ...decision, label: null, action: "deliver" as const, actionProbability: 0.99 }));
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
@@ -417,7 +417,7 @@ test("expected account mail reaches inbox without a challenge or permanent sende
 
 test("inbox cold outreach requires verification while archived mail never does", async () => {
   for (const archive of [true, false]) {
-    const f = fixture(async () => ({ ...decision, archive, action: "verify" as const }));
+    const f = fixture(async () => archive ? decision : verifyDecision);
     await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
     expect(f.gmail.messages.get("a1")!.labelIds?.includes("Label_held")).toBe(!archive);
     expect(f.gmail.notices).toHaveLength(archive ? 0 : 1);
@@ -435,10 +435,13 @@ test("protected useful mail skips verification even when an archive safeguard ke
 
 test("a filter archiving between classification and quarantine prevents a new hold", async () => {
   const f = fixture();
-  const modify = f.gmail.modify.bind(f.gmail);
-  f.gmail.modify = async (id, add, remove) => {
-    await modify(id, add, remove);
-    if (add.includes("Label_receipts")) f.gmail.messages.get(id)!.labelIds = f.gmail.messages.get(id)!.labelIds!.filter(l => l !== "INBOX");
+  const read = f.gmail.message.bind(f.gmail);
+  let minimalReads = 0;
+  f.gmail.message = async (id, format) => {
+    if (format === "minimal" && ++minimalReads === 2) {
+      f.gmail.messages.get(id)!.labelIds = [];
+    }
+    return read(id, format);
   };
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
@@ -454,22 +457,22 @@ test("one classifier call receives existing sender and custom-domain context", a
   const processor=new Processor({state:f.state,gmail:()=>f.gmail,verification:f.verification,log:()=>{},classify:async(_account,email)=>{
     calls++;
     expect(email.senderContext).toMatchObject({sentToSameCustomDomain:true,contact:false,previousCorrespondence:false});
-    return {...decision,archive:false,action:"deliver",actionProbability:.95};
+    return {...decision,action:"deliver",actionProbability:.95};
   }});
   await processor.notification(protectedAccount,"200");
   expect(calls).toBe(1);expect(f.gmail.notices).toHaveLength(0);
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
 });
 
-test("archive intent never becomes verification when confidence keeps it in inbox", async () => {
-  const f=fixture(async()=>({...decision,action:"archive" as const,archive:false,actionProbability:.8}));
+test("a delivery after category abstention skips verification", async () => {
+  const f=fixture(async()=>({...decision,action:"deliver" as const,label:null,actionProbability:.8}));
   await f.processor.notification(protectedAccount,"200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
   expect(f.gmail.notices).toHaveLength(0);
 });
 
 test("trusted company domain bypasses verification even when the model chooses verify", async () => {
-  const f = fixture(async () => ({ ...decision, archive: false, action: "verify" as const }));
+  const f = fixture(async () => ({ ...decision, action: "verify" as const }));
   f.gmail.domainCorresponded = true;
   await f.processor.notification(protectedAccount, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
@@ -479,7 +482,7 @@ test("trusted company domain bypasses verification even when the model chooses v
 });
 
 test("trusted company mail still follows the archive policy", async () => {
-  const f = fixture(async () => ({ ...decision, action: "archive" as const }));
+  const f = fixture(async () => ({ ...decision, action: "file" as const }));
   f.gmail.domainCorresponded = true;
   await f.processor.notification({ ...protectedAccount, archiveEnabled: true }, "200");
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
@@ -517,13 +520,13 @@ test("empty, unreadable or data-only bodies cause no classification, hold, or no
 
 test("shortened readable bodies follow the model action, with archive before verification", async () => {
   for (const archive of [true, false]) {
-    const f = fixture(async () => ({...decision, archive, truncated: true}));
+    const f = fixture(async () => archive ? decision : verifyDecision);
     f.gmail.messages.get("a1")!.payload!.body = {
       data: Buffer.from("Readable email details. ".repeat(3000)).toString("base64url"),
     };
     await f.processor.notification({...protectedAccount, archiveEnabled: true}, "200");
     expect(f.classified()).toBe(1);
-    expect(f.gmail.messages.get("a1")!.labelIds).toContain("Label_receipts");
+    expect(f.gmail.messages.get("a1")!.labelIds!.includes("Label_receipts")).toBe(archive);
     expect(f.gmail.messages.get("a1")!.labelIds!.includes("Label_held")).toBe(!archive);
     expect(f.gmail.notices.length).toBe(archive ? 0 : 1);
   }
@@ -543,7 +546,7 @@ test("a resumed verification attempt also requires a readable body", async () =>
 
 test("verification requires its minimum score while lower scores keep mail in the inbox", async () => {
   for (const score of [.7499,.75]) {
-    const f=fixture(async()=>({...decision,archive:false,action:"verify" as const,actionProbability:score}));
+    const f=fixture(async()=>({...decision,label:null,action:score >= .75 ? "verify" as const : "deliver" as const,actionProbability:score}));
     await f.processor.notification(protectedAccount,"200");
     expect(f.gmail.notices.length).toBe(score>=.75?1:0);
     expect(f.gmail.messages.get("a1")!.labelIds!.includes("INBOX")).toBe(score<.75);

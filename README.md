@@ -1,18 +1,18 @@
 # Clefmail for Google Cloud
 
-Clefmail organizes new Gmail messages as they arrive. It uses Clef, Jev or OpenAI Decisions to choose a label from your rules, with optional archiving for mail that needs no inbox attention. You keep using Gmail, where the labels and messages appear.
+Clefmail sorts incoming Gmail messages using a model you choose. Routine mail gets a filing label and leaves the inbox. A sign-in code, an unpaid bill or a personal request stays in the inbox for your attention.
 
-AI archiving and human verification are enabled by default. Classification and archiving run first. Messages archived under your rules skip human verification. Requests and personal messages that need your attention go to the inbox. When Clef selects human verification for cold outreach from an unknown sender, Clefmail holds the message and emails the sender a link. Once they complete the check, their held mail returns to your inbox and they become a Google Contact.
+An unsolicited pitch from an unknown sender can trigger a human check. Clefmail applies `Clefmail/Held` and sends the sender a link. When they verify, their held mail returns to your inbox and Clefmail adds them to Google Contacts.
 
-Clefmail is self-hosted on Google Cloud and supports up to ten mailboxes with separate rules. **Ready for production:** deployment and live-mail testing are complete, including sender verification.
+You host Clefmail on Google Cloud. One deployment supports up to ten mailboxes with separate rules and a choice of Clef, Jev or OpenAI Decisions.
 
 ## How mail moves through Clefmail
 
-![Clefmail reads the message and sender facts, chooses an optional topic, and routes the message to the archive, inbox or human verification.](docs/images/clefmail-flow-marker.png)
+![Clefmail reads the email and sender facts, then chooses a filing category, inbox delivery or sender verification.](docs/images/clefmail-filing-flow.png)
 
 The Gmail watch processes mail received after it starts. During setup you can also [process the messages already in your inbox](#process-your-existing-inbox). Clefmail skips Spam, Trash, drafts and sent-only messages. Read mail and messages archived by a Gmail filter remain eligible for labeling. Each update applies to an individual message and preserves its unread status and unrelated labels.
 
-AI archiving defaults to `true`. Set `archiveEnabled: false` for labeling only. Contacts are protected from Clefmail archiving; starred and important messages are also protected from AI archiving. Human verification uses its own `humanVerification` setting, which defaults to `true`.
+AI archiving defaults to `true`. Set `archiveEnabled: false` for labeling only. Starred messages and mail from protected senders stay in the inbox without a filing label. Gmail’s Important flag allows normal filing. Human verification uses its own `humanVerification` setting, which defaults to `true`.
 
 ### Labels in Gmail
 
@@ -20,13 +20,13 @@ The example configuration includes four category labels. You can rename these or
 
 | Label | What it means |
 | --- | --- |
-| `Clefmail/Receipts` | A purchase confirmation, invoice or transaction record |
+| `Clefmail/Receipts` | A paid receipt or completed transaction |
 | `Clefmail/Newsletters` | Editorial newsletters, articles and digests |
-| `Clefmail/Notifications` | Account, delivery and service updates, confirmations and codes |
+| `Clefmail/Notifications` | Routine account, delivery and service updates that need no attention |
 | `Clefmail/Promotions` | Offers, marketing campaigns and product announcements |
 | `Clefmail/Held` | The message is waiting for its sender to complete human verification; removed when the message is released |
 
-A classified message receives at most one configured category label. Category scores below 0.75 leave the category unchanged. Clef chooses `deliver` for direct requests, tasks awaiting your input and personal mail needing attention. Those messages can reach the inbox with no category label. Held messages retain their category label and receive `Clefmail/Held`. They have already been classified and keep their labels when released. Clefmail records completed processing in its private Cloud Storage bucket, so tracking adds no label to your mail.
+The model chooses one destination. A filing score of at least 0.75 applies the category and archives the message in one Gmail update. Delivery clears earlier filing categories on that message. A held message gets `Clefmail/Held`, which comes off when the sender verifies. Clefmail tracks completed work privately in Cloud Storage.
 
 If you use an older configuration, remove the `Clefmail/Action` entry from `labels` and deploy the updated configuration before deleting that label in Gmail.
 
@@ -40,15 +40,15 @@ Empty or unreadable bodies skip classification and every Gmail action, including
 
 ### Expected mail goes through
 
-Clef receives the email text and sender facts in one call, then returns a category and one structured action:
+The model receives the body and sender facts in one request.
 
-| Action | Result |
+| Choice | Result |
 | --- | --- |
-| `archive` | Apply the archive policy and skip human verification, including when a safeguard keeps the message in the inbox |
-| `deliver` | Keep the message in the inbox without a human challenge |
-| `verify` | Start sender verification when its score reaches `verificationThreshold` (default 0.75); lower scores keep the message in the inbox |
+| A filing category such as `file_newsletters` | Apply the category and archive when its score reaches `probability`. A lower score leaves the message in the inbox. |
+| `deliver` | Keep the message in the inbox with no filing label. |
+| `verify` | Check a new sender when the score reaches `verificationThreshold`. A lower score delivers the message. |
 
-Sender facts include contacts, prior correspondence, verification status and the BIMI/DMARC exemption. Sending a non-automated email to anyone at a company domain trusts every sender at that exact domain for human verification. The model can choose only `archive` or `deliver` for trusted senders. Their mail still follows the usual labeling and archive policy. Common shared providers, including Gmail, Outlook, Yahoo, iCloud and Proton, keep trust tied to the individual address. Subdomains are matched separately. Clefmail reads retained sent mail to establish this trust; its own verification emails are excluded.
+Sender facts include contacts, prior correspondence, verification status and the BIMI/DMARC exemption. Sending a non-automated email to anyone at a company domain trusts every sender at that exact domain for human verification. For trusted senders, the model chooses between a filing category and delivery. Their mail still follows the usual labeling and archive policy. Common shared providers, including Gmail, Outlook, Yahoo, iCloud and Proton, keep trust tied to the individual address. Subdomains are matched separately. Clefmail reads retained sent mail to establish this trust; its own verification emails are excluded.
 
 Expected mail includes:
 
@@ -62,7 +62,7 @@ Expected mail includes:
 - Shared documents, access approvals, project updates, job application replies, interviews, payroll, benefits and government or legal notices.
 - Personal replies and clearly subscribed newsletters or updates.
 
-These are content judgments. A sales pitch from an unknown sender disguised as a service alert should still require verification. Missing or invalid action answers are rejected and retried. A bypass based on message content applies only to that message and creates no contact.
+These are content judgments. A sales pitch from an unknown sender disguised as a service alert should still require verification. Invalid route scores leave the message untouched. A bypass based on message content applies only to that message and creates no contact.
 
 ### Human verification
 
@@ -150,7 +150,7 @@ Put your TypeSafe API key in `.env` as `CLASSIFIER_API_KEY`. Prefer a pinned, av
 
 **OpenAI Decisions**
 
-Set `"provider": {"kind": "openai"}` and put the OpenAI key in `OPENAI_API_KEY`. The processor asks the topic and routing questions together using `gpt-6-luna`. Sender trust and routing thresholds apply to the returned choice probabilities. A refusal skips that message. See the [OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions).
+Set `"provider": {"kind": "openai"}` and put the OpenAI key in `OPENAI_API_KEY`. The processor asks `gpt-6-luna` one question about the message’s destination. Sender trust and routing thresholds apply to the returned choice probabilities. A refusal skips that message. See the [OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions).
 
 For Cloud Run, create a secret containing the OpenAI key and use `OPENAI_API_KEY=your-secret:1` for the classifier binding in the private service deployment command below.
 
@@ -163,9 +163,9 @@ Other optional account settings (remove `margin` from older configurations):
 | `humanVerification` | `true` | Independently quarantine new unknown senders until verified; requires verification service configuration |
 | `probability` | `0.75` | Minimum category probability |
 | `verificationThreshold` | `0.75` | Minimum score for a `verify` action to start a human check |
-| `archiveThreshold` | `0.95` | Minimum archive probability |
 
-These thresholds are starting points, **not accuracy guarantees**. Each account supports 1–20 labels. Keep prompts free of credentials and unrelated private information.
+
+Older configuration files can still contain `archiveThreshold`. Filing now uses `probability` alone. Each account supports 1–20 labels. Keep prompts free of credentials and unrelated private information.
 
 ## 3. Create Google OAuth credentials
 
@@ -290,7 +290,7 @@ bash scripts/process-inbox.sh personal first-setup
 
 This starts a Cloud Run job. It lists the messages currently in the inbox before it starts filing them, including read mail and messages Clefmail has handled before. Each eligible message goes to your configured model with the same readable body, sender history and thresholds used for new mail. Model calls and cloud usage incur charges.
 
-The job applies category labels and archives eligible messages. A new category replaces earlier configured categories on that message. If the model selects human verification, the message stays in the inbox and its ID appears in an `inbox_pitch_flagged` log entry. Only live processing sends verification emails. The job respects stars, important flags, contacts and changes you make while it runs.
+The job applies category labels and archives eligible messages. A new category replaces earlier configured categories on that message. If the model selects human verification, the message stays in the inbox and its ID appears in an `inbox_pitch_flagged` log entry. Only live processing sends verification emails. The job rechecks inbox membership and stars before applying a filing category and preserves protected senders.
 
 The private state bucket stores the message IDs and outcomes under `inbox-runs/<account>/<run>/`. The final `inbox_run_finished` log gives counts for archived messages, ordinary inbox mail, flagged pitches and skipped messages. Use the same run name to resume after an interruption. Choose a fresh name to examine the current inbox again. New mail continues through the Gmail watch.
 
@@ -340,7 +340,7 @@ Disable processing and revoke Gmail grants first. Then remove the dedicated Sche
 ## Safety, privacy and deliberate limits
 
 - **Message-level only:** classification adds a category and may remove `INBOX`. Optional verification sends challenge/confirmation emails, creates contacts, and restores only messages recorded as having been in the inbox before quarantine. It never deletes, trashes, marks read, or modifies a whole thread. Unread status and unrelated labels are preserved.
-- **AI archive guardrails:** contacts, the mailbox's own address, and ambiguous/missing senders are protected. Contacts API failures retry instead of permitting an archive. A usable text body and valid confident category are required. Freshly checked starred, important, Spam, Trash and draft messages cannot be archived. Empty or unreadable bodies skip the model and every Gmail action. Shortened readable bodies follow the normal action thresholds. Invalid action output is retried; malformed category answers skip the message. Skips are recorded privately. Opt-in human-verification quarantine is independent of these AI thresholds and starred/important protection; Spam, Trash and drafts remain excluded.
+- **Filing safeguards** protect starred mail, contacts, verified senders, the mailbox’s own address and mail with an ambiguous sender. Gmail’s Important flag can stay on an archived message. Spam, Trash and drafts are excluded. An unreadable body skips every Gmail action. Malformed route probabilities leave the message untouched.
 - **Text extraction:** HTML and plain MIME bodies use the same text cleaner. Embedded data and attachment parts are removed before the text is shortened to 12,000 characters and 16 KiB. External resources and linked pages are not fetched. Email text exists in request memory and goes to the selected provider. Logs contain opaque message/account IDs and outcome codes, not subjects or bodies.
 - **Persistent state:** Secret Manager holds credentials/configuration, Pub/Sub holds mailbox/history metadata, Storage holds cursors/watch expiry/leases and optional sender records (email address, secret verification capability, pending message IDs and completion state), and private per-message completion records prevent repeated processing. Treat the private bucket as sensitive mailbox data; there is no automatic sender-record expiration or deletion.
 - **At-least-once, not exactly-once:** crashes can repeat inference and its cost. Processing markers usually prevent repeated completed work. Verification also journals pending messages and completion stages; deterministic Message-IDs and Sent searches reduce duplicate notices, but Gmail send/contact creation is not transactional and ambiguous failures can still duplicate external effects. Removing those markers can permit reprocessing if history is replayed.
@@ -361,7 +361,7 @@ bun run check:full  # all three
 
 | Path | Purpose |
 | --- | --- |
-| `src/classifier.ts`, `src/decision.ts` | Clef/Jev adapters, validation and archive policy |
+| `src/classifier.ts`, `src/decision.ts` | Provider adapters, route validation and filing policy |
 | `src/gmail.ts`, `src/text.ts` | Gmail API access and bounded MIME/text extraction |
 | `src/processor.ts`, `src/state.ts` | History processing, watch renewal and storage leases |
 | `src/handler.ts`, `src/server.ts` | Private Pub/Sub/renewal endpoints and isolated public service mode |

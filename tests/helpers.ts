@@ -16,18 +16,12 @@ export const email: EmailText = {
   from: "shop@example.com", to: account.email, subject: "Receipt", receivedAt: "",
   body: "Paid. No action needed.", bodyUnavailable: false, truncated: false, originalBytes: 23,
 };
-export const answer = (p = 0.99, archive: unknown = 0.99) => ({
-  model: "jev-test", answers: {
-    label: { type: "choice", choice: "receipts", confidence: 0.99, probabilities: { receipts: p, no_match: 1 - p } },
-    action: { type: "choice", choice: typeof archive === "number" && archive < 0.5 ? "verify" : "archive", confidence: 0.99,
-      probabilities: { archive, deliver: 0, verify: typeof archive === "number" ? 1 - archive : 0 } },
-  },
+export const answer = (p = 0.99) => ({
+  model: "jev-test", answers: { route: { type: "choice", choice: "file_receipts", confidence: .99,
+    probabilities: { file_receipts: p, deliver: 1-p, verify: 0 } } },
 });
-export const decision: Decision = {
-  action: "verify", actionProbability: 0.99,
-  label: "receipts", archive: true, archiveProbability: 0.99, archiveError: null,
-  reason: null, bodyUnavailable: false, truncated: false,
-};
+export const decision: Decision = { action: "file", label: "receipts", actionProbability: .99, reason: null };
+export const verifyDecision: Decision = { ...decision, action: "verify", label: null };
 export const message = (id = "a1", labels = ["INBOX"]): Message => ({
   id, labelIds: labels, internalDate: "1700000000000",
   payload: { mimeType: "text/plain", headers: [{ name: "To", value: account.email },

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { HttpError, SafeError } from "../src/errors.js";
 import { Processor } from "../src/processor.js";
 import { MailboxSession } from "../src/state.js";
-import { account, decision, FakeGmail, MemoryState, message } from "./helpers.js";
+import { account, decision, verifyDecision, FakeGmail, MemoryState, message } from "./helpers.js";
 
 function fixture(cursor: string | null = "100") {
   const state = new MemoryState(cursor);
@@ -66,7 +66,7 @@ test("rechecks protection before mutation", async () => {
     return decision;
   };
   await f.processor.notification(account, "200");
-  expect(f.gmail.modifications[0].remove).toEqual([]);
+  expect(f.gmail.modifications).toEqual([]);
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
 });
 
@@ -81,7 +81,7 @@ test("provider failures do not advance cursor or mark processed", async () => {
 
 test("a malformed label response becomes a processed abstention, never an archive", async () => {
   const f = fixture();
-  f.deps.classify = async () => { throw new SafeError("invalid_label_answer"); };
+  f.deps.classify = async () => { throw new SafeError("invalid_route_answer"); };
   await f.processor.notification(account, "200");
   expect(f.gmail.modifications).toEqual([]);
   expect(await f.state.isProcessed(account.id, "a1")).toBe(true);
@@ -108,7 +108,7 @@ test("unknown mutation outcome retries safely before private completion is recor
   expect(f.state.snapshot!.data.historyId).toBe("100");
   await f.processor.notification(account, "200");
   expect(f.count()).toBe(2);
-  expect(f.gmail.modifications.length).toBe(2);
+  expect(f.gmail.modifications.length).toBe(1);
   expect(f.state.snapshot!.data.historyId).toBe("200");
 });
 
@@ -281,10 +281,10 @@ test("old pitches are reported in the inbox without a hold or a notice", async (
     needsResume: async () => { throw Error("unexpected resume"); },
     quarantine: async () => { throw Error("unexpected hold"); },
   } as unknown as import("../src/verification.js").Verification;
-  const processor = new Processor({ ...f.deps, verification, classify: async () => ({ ...decision, archive: false }) });
+  const processor = new Processor({ ...f.deps, verification, classify: async () => verifyDecision });
   const result = await processor.processInboxItem({ ...account, humanVerification: true }, "a1", f.gmail, f.gmail.labelMap, inboxJournal());
   expect(result).toBe("flagged");
-  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["INBOX", "Label_receipts"]);
+  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["INBOX"]);
   expect(f.gmail.notices).toEqual([]);
 });
 
@@ -303,4 +303,19 @@ test("inbox run skips unreadable bodies and rechecks inbox membership after infe
   } });
   expect(await processor.processInboxItem(account, "a1", f.gmail, f.gmail.labelMap, inboxJournal())).toBe("skipped");
   expect(f.gmail.modifications).toEqual([]);
+});
+
+test("filing archives an Important message even when it already carries the category", async () => {
+  const f = fixture();
+  f.gmail.messages.set("a1", message("a1", ["INBOX", "IMPORTANT", "UNREAD", "Label_receipts"]));
+  await f.processor.notification(account, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["IMPORTANT", "UNREAD", "Label_receipts"]);
+});
+
+test("delivery clears old filing categories while keeping user labels", async () => {
+  const f = fixture();
+  f.gmail.messages.set("a1", message("a1", ["INBOX", "UNREAD", "Label_receipts", "Label_mine"]));
+  f.deps.classify = async () => ({ ...decision, action: "deliver", label: null });
+  await f.processor.notification(account, "200");
+  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["INBOX", "UNREAD", "Label_mine"]);
 });

@@ -2,13 +2,13 @@
 
 Clefmail organizes new Gmail messages as they arrive. It uses Clef or Jev to choose a label from your rules, with optional archiving for mail that needs no inbox attention. You keep using Gmail, where the labels and messages appear.
 
-AI archiving and human verification are enabled by default. Classification and archiving run first. Messages archived under your rules skip human verification. For mail that remains in the inbox, human verification holds mail from unknown senders and emails them a link to confirm they are human. Once they complete the check, their held mail returns to your inbox and they become a Google Contact.
+AI archiving and human verification are enabled by default. Classification and archiving run first. Messages archived under your rules skip human verification. Requests and personal messages that need your attention go to the inbox. When Clef selects human verification for cold outreach from an unknown sender, Clefmail holds the message and emails the sender a link. Once they complete the check, their held mail returns to your inbox and they become a Google Contact.
 
 Clefmail is self-hosted on Google Cloud and supports up to ten mailboxes with separate rules. **Ready for production:** deployment and live-mail testing are complete, including sender verification.
 
 ## How mail moves through Clefmail
 
-![Marker-pen diagram of Clefmail: new Gmail messages follow AI labeling or human verification, with a legend for category, held and processed labels.](docs/images/clefmail-flow-marker.png)
+![Clefmail reads the message and sender facts, chooses an optional topic, and routes the message to the archive, inbox or human verification.](docs/images/clefmail-flow-marker.png)
 
 Processing starts with mail received after the first Gmail watch is registered. Clefmail skips Spam, Trash, drafts and sent-only messages. Read mail and messages archived by a Gmail filter remain eligible for labeling. Each update applies to an individual message and preserves its unread status and unrelated labels.
 
@@ -16,18 +16,19 @@ AI archiving defaults to `true`. Set `archiveEnabled: false` for labeling only. 
 
 ### Labels in Gmail
 
-The example configuration includes five category labels. You can rename these or define your own in `config.json`.
+The example configuration includes four category labels. You can rename these or define your own in `config.json`.
 
 | Label | What it means |
 | --- | --- |
-| `Clefmail/Action` | A request or personal message that needs your attention |
 | `Clefmail/Receipts` | A purchase confirmation, invoice or transaction record |
 | `Clefmail/Newsletters` | Editorial newsletters, articles and digests |
 | `Clefmail/Notifications` | Account, delivery and service updates, confirmations and codes |
 | `Clefmail/Promotions` | Offers, marketing campaigns and product announcements |
 | `Clefmail/Held` | The message is waiting for its sender to complete human verification; removed when the message is released |
 
-A classified message receives at most one configured category label. Category scores below 0.75 leave the category unchanged. Inbox handling follows the separate action decision. Held messages retain their category label and receive `Clefmail/Held`. They have already been classified and keep their labels when released. Clefmail records completed processing in its private Cloud Storage bucket, so tracking adds no label to your mail.
+A classified message receives at most one configured category label. Category scores below 0.75 leave the category unchanged. Clef chooses `deliver` for direct requests, tasks awaiting your input and personal mail needing attention. Those messages can reach the inbox with no category label. Held messages retain their category label and receive `Clefmail/Held`. They have already been classified and keep their labels when released. Clefmail records completed processing in its private Cloud Storage bucket, so tracking adds no label to your mail.
+
+If you use an older configuration, remove the `Clefmail/Action` entry from `labels` and deploy the updated configuration before deleting that label in Gmail.
 
 ### Readable content is required
 
@@ -122,7 +123,7 @@ Edit `config.json`:
 1. Set `accounts[0].email` to your actual Gmail/Workspace mailbox address, not an unrelated sending alias.
 2. Leave its ID as `personal` and `refreshTokenEnv` as `GMAIL_PERSONAL_REFRESH_TOKEN` for the commands below.
 3. Set `archiveEnabled` to match your policy: `true` allows eligible messages to be archived; `false` keeps AI processing to labeling.
-4. Customize the prompt and label descriptions. Labels are Gmail label names, such as `Clefmail/Action`; the short `id` fields are internal classification choices, not Gmail's generated label IDs.
+4. Customize the prompt and label descriptions. Use the Gmail label name in `name`, for example `Clefmail/Receipts`. The model uses the short `id` to choose a category.
 5. Choose exactly one provider for the deployment:
 
 **Clef through Cloudflare Workers AI REST:**

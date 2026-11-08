@@ -131,5 +131,26 @@
     "senderContext": {
       "previousCorrespondence": true
     }
+  },
+  {
+    "name": "direct request for a decision",
+    "expected": "deliver",
+    "subject": "Which proof should we print?",
+    "body": "I finished the two proofs for the programme we discussed. Could you choose the cover by this afternoon so I can send your choice to the printer?",
+    "senderContext": {
+      "previousCorrespondence": true
+    }
+  },
+  {
+    "name": "task awaiting the owner",
+    "expected": "deliver",
+    "subject": "Approval for the repair",
+    "body": "Following our inspection of your flat this morning, the electrician can fix the faulty socket on Wednesday. Please confirm access and approve the quoted work before I book the slot."
+  },
+  {
+    "name": "personal message needing a reply",
+    "expected": "deliver",
+    "subject": "Sunday lunch",
+    "body": "Hi Damien, can you let me know if you're coming for lunch this Sunday? I'm getting the groceries on Saturday. Love, Mum."
   }
 ]

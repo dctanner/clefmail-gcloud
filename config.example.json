@@ -10,13 +10,8 @@
       "refreshTokenEnv": "GMAIL_PERSONAL_REFRESH_TOKEN",
       "archiveEnabled": true,
       "humanVerification": true,
-      "prompt": "Choose the best label, or no_match if uncertain. Archive only routine messages that need no response, task, or inbox attention. Routine receipts and newsletters may be archived. Keep payment problems, direct requests, time-sensitive notices, and personal conversations in the inbox.",
+      "prompt": "Choose a topic label when the content fits. Use no_match for personal correspondence and requests that have no matching topic. Deliver direct requests, tasks awaiting my input and personal messages needing my attention. Archive routine mail that needs no response, task or inbox attention, including paid receipts and newsletters.",
       "labels": [
-        {
-          "id": "action",
-          "name": "Clefmail/Action",
-          "description": "Requests, tasks, and personal messages needing my attention."
-        },
         {
           "id": "receipts",
           "name": "Clefmail/Receipts",

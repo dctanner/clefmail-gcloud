@@ -27,6 +27,6 @@ export class Classifier {
     }, { fetch: this.fetcher, signal, maxBytes: 131_072 });
     if (clef && raw?.success !== true) throw new SafeError("classifier_unsuccessful");
     const answers = openai ? openaiAnswers(raw) : clef ? raw.result : raw;
-    return decide(answers, account, input.state);
+    return { ...decide(answers, account, input.state), provider: this.provider.kind, model };
   }
 }

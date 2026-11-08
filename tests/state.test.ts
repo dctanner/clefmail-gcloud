@@ -66,7 +66,7 @@ test("missing object differs from a pinned-read overwrite race", async () => {
   expect(await f.store.read("personal")).toBeNull();
   f.metadata({ generation: "1", size: "19" });
   f.downloadError(missing);
-  await expect(f.store.read("personal")).rejects.toThrow("missing");
+  await expect(f.store.read("personal")).rejects.toThrow("mailbox_busy");
 });
 
 test("oversized checkpoint and traversal account IDs are rejected", async () => {

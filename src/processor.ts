@@ -103,7 +103,7 @@ export class Processor {
     this.log("message_classified", {
       account: account.id, message: id, source: run.mode, label: decision.label, archiveProbability: decision.archiveProbability,
       archiveBlock: block, action: decision.action, actionProbability: decision.actionProbability,
-      bodyTruncated: email.truncated,
+      provider: decision.provider ?? null, model: decision.model ?? null, bodyTruncated: email.truncated,
       verificationPolicy: block === null ? "archived" : modelBypass ? "expected_mail" : checkSender ? (inboxRun ? "report_only" : "sender_checks") : "not_required",
     });
     const add: string[] = [];

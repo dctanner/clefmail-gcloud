@@ -1,4 +1,4 @@
-import type { Account } from "./config.js";
+import type { Account, Config } from "./config.js";
 import { BODY_MAX_BYTES, BODY_MAX_CHARS, clip, plainText, type EmailText } from "./text.js";
 import { SafeError } from "./errors.js";
 
@@ -74,6 +74,8 @@ Classify the message's purpose; you do not need proof of a prior relationship fo
 }
 
 export interface Decision {
+  provider?: Config["provider"]["kind"];
+  model?: string;
   label: string | null;
   archive: boolean;
   archiveProbability: number | null;

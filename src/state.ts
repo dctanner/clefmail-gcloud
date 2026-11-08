@@ -61,7 +61,11 @@ export class GcsStateStore implements StateStore {
       throw error;
     }
     // Pin the read to the metadata generation; never pair old metadata with new bytes.
-    const [bytes] = await this.file(accountId, generation).download({ validation: "crc32c" });
+    const [bytes] = await this.file(accountId, generation).download({ validation: "crc32c" }).catch(error => {
+      // Another owner can replace this generation between getMetadata and download.
+      if (error?.code === 404) throw new SafeError("mailbox_busy");
+      throw error;
+    });
     if (bytes.length > 16_384) throw new SafeError("invalid_checkpoint");
     return { data: stateSchema.parse(JSON.parse(bytes.toString("utf8"))), generation };
   }

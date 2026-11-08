@@ -55,7 +55,13 @@ async function main() {
   const counts = { archived: 0, inbox: 0, flagged: 0, skipped: 0 };
   log("inbox_run_started", { account: account.id, run: runName, total: ids.length, provider: config.provider.kind });
   for (const id of ids) {
-    const outcome = await processor.processInboxItem(account, id, gmail, labels, journal);
+    const outcome = await processor.processInboxItem(account, id, gmail, labels, journal).catch(error => {
+      log("inbox_item_failed", {
+        account: account.id, run: runName, message: id, code: errorCode(error),
+        status: Number.isInteger(error?.code) ? error.code : null,
+      });
+      throw error;
+    });
     counts[outcome]++;
     if (outcome === "flagged") log("inbox_pitch_flagged", { account: account.id, run: runName, message: id });
   }

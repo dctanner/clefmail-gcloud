@@ -104,8 +104,8 @@ test("runtime label lookup never creates missing labels; explicit setup does", a
     }));
   await expect(client.labels(account)).rejects.toThrow("gmail_label_missing_run_setup");
   expect(created).toBe(0);
-  expect(await client.labels(account, true)).toEqual({ processed: "", held: "Label_3", hold: "Label_4", options: { receipts: "Label_1", "Clefmail/Suspicious": "Label_2" } });
-  expect(created).toBe(4);
+  expect(await client.labels(account, true)).toEqual({ processed: "", held: "Label_3", options: { receipts: "Label_1", "Clefmail/Suspicious": "Label_2" } });
+  expect(created).toBe(3);
 });
 
 test("label creation reads back missing type and rejects a system label", async () => {
@@ -126,7 +126,7 @@ test("label creation reads back missing type and rejects a system label", async 
         throw new Error("Unexpected request");
       }));
     if (type === "user") {
-      expect(await client.labels(account, true)).toEqual({ processed: "", held: "Label_3", hold: "Label_4", options: { receipts: "Label_1", "Clefmail/Suspicious": "Label_2" } });
+      expect(await client.labels(account, true)).toEqual({ processed: "", held: "Label_3", options: { receipts: "Label_1", "Clefmail/Suspicious": "Label_2" } });
     } else {
       await expect(client.labels(account, true)).rejects.toThrow("system_label_not_allowed");
     }

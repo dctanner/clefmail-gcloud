@@ -3,7 +3,6 @@ import { z } from "zod";
 import { SafeError } from "./errors.js";
 
 export const PROCESSED_LABEL = "Clefmail/Processed";
-export const HOLD_LABEL = "Clefmail/Hold";
 export const HELD_LABEL = "Clefmail/Held";
 export const SUSPICIOUS_LABEL = "Clefmail/Suspicious";
 const optionSchema = z.object({
@@ -26,7 +25,9 @@ export const accountSchema = z.object({
   verificationThreshold: z.number().min(0.5).max(1).default(0.75),
   // Accepted for older configurations. A filing category now includes archiving.
   archiveThreshold: z.number().min(0.5).max(1).optional(),
-  labels: z.array(optionSchema).min(1).max(20),
+  labels: z.array(optionSchema).min(1).max(20)
+    // Older configurations could list the retired batch label as a category.
+    .transform(labels => labels.filter(label => label.name !== "Clefmail/Hold")),
 }).strict().superRefine((v, ctx) => {
   for (const key of ["id", "name"] as const) {
     if (new Set(v.labels.map(l => l[key])).size !== v.labels.length)

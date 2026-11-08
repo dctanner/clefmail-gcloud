@@ -1,7 +1,7 @@
 import { openaiPrompt } from "../src/openai-decisions.js";
 import { expect, test } from "bun:test";
 import { decide, request } from "../src/decision.js";
-import { configSchema } from "../src/config.js";
+import { accountSchema, configSchema } from "../src/config.js";
 import { account, answer, config, email } from "./helpers.js";
 
 test("one model request chooses exactly one destination", () => {
@@ -106,4 +106,11 @@ test("a winning filing category uses combined filing probability and leaves a wi
   expect(classify("file_receipts", .46, .24, .30)).toMatchObject({ action: "file", label: "receipts", actionProbability: .70 });
   expect(classify("file_receipts", .46, .23, .31)).toMatchObject({ action: "deliver", reason: "low_probability" });
   expect(classify("deliver", .30, .31, .39)).toMatchObject({ action: "deliver", reason: null });
+});
+
+
+test("older configs cannot recreate the retired Hold category", () => {
+  const legacy = { id: "manual", name: "Clefmail/Hold", description: "Review" };
+  const mailbox = accountSchema.parse({ ...account, labels: [...account.labels, legacy] });
+  expect(mailbox.labels).toEqual(account.labels);
 });

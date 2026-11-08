@@ -71,6 +71,25 @@ test("filed mail skips sender verification entirely", async () => {
   expect(f.senders.values.size).toBe(0);
 });
 
+test("verification releases only live messages under the shared Held label", async () => {
+  const f = fixture();
+  const mailbox = { ...protectedAccount, archiveEnabled: true };
+  const journal = { read: async () => null, save: async () => {} };
+  await f.processor.notification(mailbox, "200");
+  f.gmail.messages.set("a2", message("a2"));
+  const batch = (id: string) => f.processor.processInboxItem(mailbox, id, f.gmail, f.gmail.labelMap, journal);
+  expect(await batch("a1")).toBe("skipped");
+  expect(await batch("a2")).toBe("hold");
+  expect(await batch("a2")).toBe("hold");
+  for (const id of ["a1", "a2"]) expect(f.gmail.messages.get(id)!.labelIds).toEqual(["Label_held"]);
+  expect(f.gmail.notices).toHaveLength(1);
+  const record = await f.record();
+  expect(record.pending.map(item => item.id)).toEqual(["a1"]);
+  await f.verification.complete(mailbox, digest(sender), record.token);
+  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["INBOX"]);
+  expect(f.gmail.messages.get("a2")!.labelIds).toEqual(["Label_held"]);
+});
+
 test("cold outreach receives only the held label", async () => {
   const f = fixture();
   const send = f.gmail.sendNotice.bind(f.gmail);

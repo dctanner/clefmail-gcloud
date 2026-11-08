@@ -2,8 +2,7 @@
 
 Sender verification is ready for production. Live-mail testing is complete.
 
-Held messages carry `Clefmail/Held`. Successful verification removes that label
-and restores messages that originally arrived in the inbox.
+Live processing and manual inbox batches share `Clefmail/Held`. Verification releases the messages recorded for that challenge. Batch holds wait for your review and send no email.
 
 ## Behavior
 
@@ -130,8 +129,7 @@ restores that test message and sends a confirmation. Test records leave Google
 Contacts and ordinary sender trust unchanged, so you can repeat the test by
 sending another message with the same subject.
 
-Held messages carry `Clefmail/Held`. Successful verification removes that label
-and restores messages that originally arrived in the inbox. Both test and normal
+Live holds carry `Clefmail/Held`. Successful verification removes the label from messages recorded for that challenge and restores those that originally arrived in the inbox. Both test and normal
 verification send the same success email.
 
 Spam, Trash, drafts, malformed sender headers, and the automatic-reply safeguards

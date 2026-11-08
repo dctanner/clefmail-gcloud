@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { HOLD_LABEL, type Account } from "./config.js";
+import { HELD_LABEL, type Account } from "./config.js";
 import type { Decision } from "./decision.js";
 import { errorCode, HttpError, log, SafeError } from "./errors.js";
 import { type GmailPort, type LabelMap, verifyMailbox } from "./gmail.js";
@@ -46,14 +46,17 @@ export class Processor {
       return "skipped";
     }
     const inboxRun = run.mode === "inbox";
-    const outsideInbox = (ids: string[] = []) => !ids.includes("INBOX") || ids.includes(labels.held);
     if (!received(message, account.email)) return "skipped";
-    // A retry after Gmail accepted a manual hold can recover the outcome from its label.
-    if (message.labelIds?.includes(labels.hold)) return inboxRun ? "hold" : "skipped";
-    if (inboxRun && outsideInbox(message.labelIds)) return "skipped";
+    const alreadyHeld = message.labelIds?.includes(labels.held);
+    if (inboxRun && !alreadyHeld && !message.labelIds?.includes("INBOX")) return "skipped";
     const verify = account.humanVerification || isVerificationTest(account, message);
-    const resume = !inboxRun && verify &&
-      await this.deps.verification?.needsResume(account, message);
+    const resume = verify && (!inboxRun || alreadyHeld) &&
+      await this.deps.verification?.needsResume(account, message, labels.held);
+    if (alreadyHeld) {
+      // Only the live path may resume a challenge recorded for this message.
+      if (inboxRun) return resume ? "skipped" : "hold";
+      if (!resume) return "skipped";
+    }
     const processed = !inboxRun && (message.labelIds?.includes(labels.processed) || await this.deps.state.isProcessed(account.id, id));
     if (processed && !resume) return "skipped";
     if (verify && !this.deps.verification) throw new SafeError("verification_not_configured");
@@ -88,8 +91,8 @@ export class Processor {
     const current = await gmail.message(id, "minimal");
     if (current.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT"].includes(l))) return "skipped";
     const currentLabels = current.labelIds || [];
-    if (currentLabels.includes(labels.hold)) return inboxRun ? "hold" : "skipped";
-    if (inboxRun ? outsideInbox(currentLabels) : currentLabels.includes(labels.processed)) return "skipped";
+    if (currentLabels.includes(labels.held)) return "skipped";
+    if (inboxRun ? !currentLabels.includes("INBOX") : currentLabels.includes(labels.processed)) return "skipped";
     const inInbox = currentLabels.includes("INBOX");
     const test = isVerificationTest(account, message);
     let label = !test && decision.action === "file" ? decision.label : null;
@@ -103,7 +106,7 @@ export class Processor {
     if (suspicious) label = decision.label;
     const checkSender = verify && inInbox && (decision.choice ?? decision.action) !== "suspicious" && (test || decision.action === "verify");
     const manualHold = inboxRun && checkSender;
-    if (manualHold) label = HOLD_LABEL;
+    if (manualHold) label = HELD_LABEL;
     const archive = !!label && account.archiveEnabled && inInbox;
     this.log("message_classified", {
       account: account.id, message: id, source: run.mode, label, action: decision.action, choice: decision.choice ?? null,
@@ -111,7 +114,7 @@ export class Processor {
       model: decision.model ?? null, bodyTruncated: email.truncated,
       verificationPolicy: manualHold ? "manual_review" : checkSender ? "sender_checks" : "not_required",
     });
-    const selected = manualHold ? labels.hold : label ? labels.options[label] : undefined;
+    const selected = manualHold ? labels.held : label ? labels.options[label] : undefined;
     if (label && !selected) throw new SafeError("unmapped_label");
     const add = selected && (archive || !currentLabels.includes(selected)) ? [selected] : [];
     const remove = archive ? ["INBOX"] : [];

@@ -2,7 +2,7 @@
 
 Clefmail sorts incoming Gmail messages using a model you choose. Routine mail gets a filing label and leaves the inbox. A sign-in code, an unpaid bill or a personal request stays in the inbox for your attention.
 
-Suspected phishing gets the `Clefmail/Suspicious` label and goes to the archive. An unsolicited pitch from an unknown sender can trigger a human check. Clefmail applies `Clefmail/Held` and sends the sender a link. When they verify, their held mail returns to your inbox and Clefmail adds them to Google Contacts.
+Suspected phishing gets the `Clefmail/Suspicious` label and goes to the archive. A new unsolicited pitch from an unknown sender can trigger a human check. Clefmail applies `Clefmail/Held` and sends the sender a link. When they verify, mail held for that verification returns to your inbox and Clefmail adds them to Google Contacts.
 
 You host Clefmail on Google Cloud. One deployment supports up to ten mailboxes with separate rules and a choice of Clef, Jev or OpenAI Decisions.
 
@@ -25,10 +25,9 @@ The example configuration includes four category labels. You can rename these or
 | `Clefmail/Notifications` | Routine account, delivery and service updates that need no attention |
 | `Clefmail/Promotions` | Offers, marketing campaigns and product announcements |
 | `Clefmail/Suspicious` | Suspected phishing. Clefmail archives it and sends no reply. |
-| `Clefmail/Hold` | A cold pitch from an inbox batch awaits your review. The sender receives no email. |
-| `Clefmail/Held` | The sender must complete human verification before the message returns to the inbox. |
+| `Clefmail/Held` | Live processing holds eligible pitches for sender verification. A manual inbox batch uses the same label for pitches you can review yourself. |
 
-The model chooses one destination. When an ordinary category wins, Clefmail adds the probabilities of all ordinary categories. A total of at least 0.70 applies the winning label and archives the message in one Gmail update. For example, 46% Receipts plus 25% Notifications files the message as Receipts if Receipts is the top choice. Delivery clears earlier filing categories on that message. A held message gets `Clefmail/Held`, which comes off when the sender verifies. Clefmail tracks completed work privately in Cloud Storage.
+The model chooses one destination. When an ordinary category wins, Clefmail adds the probabilities of all ordinary categories. A total of at least 0.70 applies the winning label and archives the message in one Gmail update. For example, 46% Receipts plus 25% Notifications files the message as Receipts if Receipts is the top choice. Delivery clears earlier filing categories on that message. Clefmail tracks completed work privately in Cloud Storage.
 
 If you use an older configuration, remove the `Clefmail/Action` entry from `labels` and deploy the updated configuration before deleting that label in Gmail.
 
@@ -201,7 +200,7 @@ export GMAIL_PERSONAL_REFRESH_TOKEN="$(<.secrets/personal.token)"
 bun run setup
 ```
 
-`setup` verifies the mailbox and creates the configured categories and the built-in Hold, Held and Suspicious labels. Run setup before deploying an upgrade that adds a label. **It does not read message bodies, classify messages, or start a watch.** The runtime only looks up labels; rerun setup if you deliberately change the label configuration.
+`setup` verifies the mailbox and creates the configured categories and the built-in Held and Suspicious labels. Run setup before deploying an upgrade that adds a label. **It does not read message bodies, classify messages, or start a watch.** The runtime only looks up labels; rerun setup if you deliberately change the label configuration.
 
 Bun loads `.env` automatically for local tools; Bash and `gcloud` do not. The exported token above takes precedence over the placeholder in `.env`. Do not use shell tracing (`set -x`) while handling credentials.
 
@@ -293,7 +292,7 @@ bash scripts/process-inbox.sh personal first-setup
 
 This starts a Cloud Run job. It lists the messages currently in the inbox before it starts filing them, including read mail and messages Clefmail has handled before. Each eligible message goes to your configured model with the same readable body, sender history and thresholds used for new mail. Model calls and cloud usage incur charges.
 
-The job applies category labels and archives eligible messages. A new category replaces earlier configured categories on that message. When a cold pitch qualifies for human verification, the batch applies `Clefmail/Hold` for manual review. With archiving enabled, the pitch leaves the inbox. The batch sends no email to the sender. Open Hold in Gmail to review each pitch. To keep one, move it to the inbox and remove Hold. To dismiss one, remove Hold and leave it archived or move it to Trash. The job rechecks inbox membership. Stars and protected senders prevent ordinary filing. A qualifying phishing decision archives the message under `Clefmail/Suspicious`.
+The job applies category labels and archives eligible messages. A new category replaces earlier configured categories on that message. When a cold pitch qualifies for human verification, the batch applies `Clefmail/Held` for manual review. With archiving enabled, the pitch leaves the inbox. The batch sends no email to the sender. Open Held in Gmail to review batch pitches. To keep one, move it to the inbox and remove Held. You can also remove Held and leave it archived, or move it to Trash. The job rechecks inbox membership. Stars and protected senders prevent ordinary filing. A qualifying phishing decision archives the message under `Clefmail/Suspicious`.
 
 The private state bucket stores the message IDs and outcomes under `inbox-runs/<account>/<run>/`. The final `inbox_run_finished` log gives counts for archived messages, ordinary inbox mail, manual holds and skipped messages. Older runs can include `flagged` pitches that were left in the inbox. Use the same run name to resume after an interruption. Choose a fresh name to examine the current inbox again. New mail continues through the Gmail watch.
 
@@ -308,7 +307,7 @@ gcloud --project="$PROJECT" run services logs read clefmail-gcloud \
 
 Successful `watch_renewed` events record Gmail watch renewal for each mailbox. Cloud Logging and Pub/Sub/Scheduler metrics show processing failures and delivery delays. Useful alerts include Scheduler failure, `request_failed`, `history_gap_dropped`, `lease_release_failed`, and a growing dead-letter backlog.
 
-Held messages appear under `Clefmail/Held` in Gmail. Successful sender verification removes that label and restores messages that originally arrived in the inbox.
+Both flows use `Clefmail/Held` in Gmail. Successful sender verification releases the messages covered by that challenge. Batch holds stay available for manual review.
 
 ## Operating your deployment
 

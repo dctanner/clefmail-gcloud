@@ -1,6 +1,6 @@
 import { customSenderDomain } from "./sender-context.js";
 import { z } from "zod";
-import { PROCESSED_LABEL, HELD_LABEL, HOLD_LABEL, SUSPICIOUS_LABEL, type Account } from "./config.js";
+import { PROCESSED_LABEL, HELD_LABEL, SUSPICIOUS_LABEL, type Account } from "./config.js";
 import { HttpError, SafeError } from "./errors.js";
 import { jsonRequest, type Fetch } from "./http.js";
 import type { Message } from "./text.js";
@@ -22,7 +22,6 @@ export type HistoryPage = z.infer<typeof historyPageSchema>;
 export interface LabelMap {
   processed: string;
   held: string;
-  hold: string;
   options: Record<string, string>;
 }
 export type MessageFormat = "full" | "minimal" | "metadata";
@@ -192,8 +191,7 @@ export class Gmail implements GmailPort {
     for (const label of account.labels) options[label.id] = await find(label.name);
     options[SUSPICIOUS_LABEL] = await find(SUSPICIOUS_LABEL);
     const held = await find(HELD_LABEL);
-    const hold = await find(HOLD_LABEL);
-    return { processed, held, hold, options };
+    return { processed, held, options };
   }
 
   async modify(id: string, add: string[], remove: string[], categories?: LabelMap["options"]): Promise<void> {

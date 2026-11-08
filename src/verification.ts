@@ -192,12 +192,15 @@ export class Verification {
 
   // Called BEFORE the processed-marker shortcut so interrupted challenge delivery
   // is retried even when the message was already archived/marked.
-  async needsResume(account: Account, message: Message): Promise<boolean> {
+  async needsResume(account: Account, message: Message, heldLabel: string): Promise<boolean> {
     const sender = senderOf(message);
     if (!sender) return false;
     const record = (await this.deps.senders.read(account.id, senderKey(account, message, sender)))?.record;
-    return !!record && (record.pending.some(item => item.id === message.id) ||
-      record.status === "verifying" || (record.status === "verified" && !record.successSent));
+    if (!record) return false;
+    if (record.pending.some(item => item.id === message.id)) return true;
+    // A batch hold shares the Gmail label but has no live verification entry.
+    if (message.labelIds?.includes(heldLabel)) return false;
+    return record.status === "verifying" || (record.status === "verified" && !record.successSent);
   }
 
   async trusted(account: Account, sender: string): Promise<boolean> {

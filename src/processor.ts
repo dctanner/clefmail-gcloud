@@ -95,10 +95,12 @@ export class Processor {
           (email.senderContext?.contact ?? await gmail.hasContact(sender)) ||
           (account.humanVerification && email.senderContext?.verified)) label = null;
     }
+    const suspicious = decision.action === "suspicious";
+    if (suspicious) label = decision.label;
     const archive = !!label && account.archiveEnabled && inInbox;
-    const checkSender = verify && inInbox && (test || decision.action === "verify");
+    const checkSender = verify && inInbox && (decision.choice ?? decision.action) !== "suspicious" && (test || decision.action === "verify");
     this.log("message_classified", {
-      account: account.id, message: id, source: run.mode, label, action: decision.action,
+      account: account.id, message: id, source: run.mode, label, action: decision.action, choice: decision.choice ?? null,
       actionProbability: decision.actionProbability, provider: decision.provider ?? null,
       model: decision.model ?? null, bodyTruncated: email.truncated,
       verificationPolicy: checkSender ? (inboxRun ? "report_only" : "sender_checks") : "not_required",

@@ -69,6 +69,11 @@ function stripEmbeddedData(text: string): string {
     .replace(/\bdata:[^\s,<>"']*;base64,\s*[A-Za-z0-9+/_=-]*(?:\n[ \t]*[A-Za-z0-9+/_=-]{16,})*/gi, "")
     .replace(/\bdata:[^\s,<>"']*,\s*[^\s<>"')\]]*/gi, "")
     .replace(/\bcid:[^\s<>"')\]]+/gi, "")
+    // Keep the destination visible even when a private reset token fills its path.
+    .replace(/\bhttps?:\/\/[^\s<>"'\[\]]+/gi, link => {
+      try { return new URL(link).origin; }
+      catch { return "[unreadable link]"; }
+    })
     // Remove wrapped base64 blocks before HTML conversion collapses whitespace.
     .replace(/^[ \t]*(?:[A-Za-z0-9+/_-]{20,}={0,2}[ \t]*(?:\n|$)){2,}/gm, "")
     .replace(/[A-Za-z0-9+/_-]{64,}={0,2}/g, "")

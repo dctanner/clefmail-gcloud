@@ -1,6 +1,6 @@
 import { customSenderDomain } from "./sender-context.js";
 import { z } from "zod";
-import { PROCESSED_LABEL, HELD_LABEL, type Account } from "./config.js";
+import { PROCESSED_LABEL, HELD_LABEL, SUSPICIOUS_LABEL, type Account } from "./config.js";
 import { HttpError, SafeError } from "./errors.js";
 import { jsonRequest, type Fetch } from "./http.js";
 import type { Message } from "./text.js";
@@ -189,6 +189,7 @@ export class Gmail implements GmailPort {
     const processed = legacy?.id || "";
     const options: Record<string, string> = {};
     for (const label of account.labels) options[label.id] = await find(label.name);
+    options[SUSPICIOUS_LABEL] = await find(SUSPICIOUS_LABEL);
     const held = await find(HELD_LABEL);
     return { processed, held, options };
   }

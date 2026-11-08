@@ -4,6 +4,7 @@ import { SafeError } from "./errors.js";
 
 export const PROCESSED_LABEL = "Clefmail/Processed";
 export const HELD_LABEL = "Clefmail/Held";
+export const SUSPICIOUS_LABEL = "Clefmail/Suspicious";
 const optionSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{0,49}$/)
     .refine(v => !["no_match", "constructor", "prototype", "__proto__"].includes(v)),
@@ -20,7 +21,7 @@ export const accountSchema = z.object({
   archiveEnabled: z.boolean().default(true),
   humanVerification: z.boolean().default(true),
   humanVerificationTest: z.boolean().default(false),
-  probability: z.number().min(0.5).max(1).default(0.75),
+  probability: z.number().min(0.5).max(1).default(0.70),
   verificationThreshold: z.number().min(0.5).max(1).default(0.75),
   // Accepted for older configurations. A filing category now includes archiving.
   archiveThreshold: z.number().min(0.5).max(1).optional(),

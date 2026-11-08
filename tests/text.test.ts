@@ -152,3 +152,15 @@ test("formatted HTML fragments in plain MIME parts become text", async () => {
   expect(text.body).not.toContain("<b>");
   expect(text.body).not.toContain("<a");
 });
+
+test("keeps the destination origin while removing reset tokens, tracking data and URL credentials", async () => {
+  const m = message();
+  const token = "A".repeat(150);
+  const body = `Reset your password: <a href="https://auth.example.org/${token}?code=private#fragment">Reset</a>.
+  Account details: https://brand.example:password@unrelated.example/billing?code=private`;
+  m.payload!.body = { data: Buffer.from(body).toString("base64url") };
+  const result = await extract(m, async () => ({ data: "" }));
+  expect(result.body).toContain("https://auth.example.org");
+  expect(result.body).toContain("https://unrelated.example");
+  for (const secret of [token, "private", "fragment", "password@", "brand.example"]) expect(result.body).not.toContain(secret);
+});

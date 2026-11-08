@@ -552,3 +552,19 @@ test("verification requires its minimum score while lower scores keep mail in th
     expect(f.gmail.messages.get("a1")!.labelIds!.includes("INBOX")).toBe(score<.75);
   }
 });
+
+test("suspicious mail gets its own label, including starred mail from a contact and the verification test subject", async () => {
+  for (const archiveEnabled of [true, false]) {
+    const f = fixture(async () => ({ ...decision, action: "suspicious", label: "Clefmail/Suspicious" }));
+    f.gmail.contacts.add(sender);
+    const msg = message("a1", ["INBOX", "STARRED", "UNREAD", "Label_receipts", "Label_personal"]);
+    msg.payload!.headers!.push({ name: "Subject", value: "Human verification test" });
+    f.gmail.messages.set("a1", msg);
+    await f.processor.notification({ ...protectedAccount, humanVerificationTest: true, archiveEnabled }, "200");
+    const labels = f.gmail.messages.get("a1")!.labelIds!;
+    expect(labels.includes("INBOX")).toBe(!archiveEnabled);
+    expect(labels.filter(id => id !== "INBOX").sort()).toEqual(["Label_personal", "Label_suspicious", "STARRED", "UNREAD"]);
+    expect(f.gmail.notices).toHaveLength(0);
+    expect(f.senders.values.size).toBe(0);
+  }
+});

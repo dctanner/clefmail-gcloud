@@ -7,7 +7,7 @@ import { account, answer, config, email } from "./helpers.js";
 test("one model request chooses exactly one destination", () => {
   const input=request(account,email,"clef");
   expect(Object.keys(input.questions)).toEqual(["route"]);
-  expect(Object.keys(input.questions.route.criteria)).toEqual(["file_receipts","deliver","verify"]);
+  expect(Object.keys(input.questions.route.criteria)).toEqual(["file_receipts","suspicious","deliver","verify"]);
   expect(JSON.stringify(input)).not.toContain("refreshToken");
   const shortened = request(account,{...email,body:"Useful content. ".repeat(7000)},"clef");
   expect(shortened.state.truncated).toBe(true);
@@ -16,11 +16,11 @@ test("one model request chooses exactly one destination", () => {
 });
 
 test("filing uses the category threshold, with verification scored separately", () => {
-  expect(decide(answer(.75), account, email)).toMatchObject({action:"file", label:"receipts"});
-  expect(decide(answer(.749), account, email)).toMatchObject({action:"deliver", label:null});
+  expect(decide(answer(.75), {...account, probability: .75}, email)).toMatchObject({action:"file", label:"receipts"});
+  expect(decide(answer(.749), {...account, probability: .75}, email)).toMatchObject({action:"deliver", label:null});
   for (const score of [.749, .75]) {
     const raw = answer();
-    raw.answers.route = {type:"choice", choice:"verify", confidence:score, probabilities:{file_receipts:0,deliver:1-score,verify:score}};
+    raw.answers.route = {type:"choice", choice:"verify", confidence:score, probabilities:{suspicious:0,file_receipts:0,deliver:1-score,verify:score}};
     expect(decide(raw,account,email)).toMatchObject({action:score >= .75 ? "verify" : "deliver", label:null});
   }
 });
@@ -44,9 +44,9 @@ test("trusted sender facts remove verification from the model's allowed actions"
     pendingVerification: false, sentToSameCustomDomain: false, bimiDmarc: false, verificationTest: false };
   for (const key of ["ownAddress", "contact", "verified", "previousCorrespondence", "sentToSameCustomDomain", "bimiDmarc"]) {
     const trustedEmail = { ...email, senderContext: { ...facts, [key]: true } };
-    expect(Object.keys(request(account, trustedEmail, "clef").questions.route.criteria)).toEqual(["file_receipts", "deliver"]);
+    expect(Object.keys(request(account, trustedEmail, "clef").questions.route.criteria)).toEqual(["file_receipts", "suspicious", "deliver"]);
     const raw = answer();
-    raw.answers.route = { type: "choice", choice: "deliver", confidence: .99, probabilities: { file_receipts: .01, deliver: .99 } } as any;
+    raw.answers.route = { type: "choice", choice: "deliver", confidence: .99, probabilities: { suspicious: 0, file_receipts: .01, deliver: .99 } } as any;
     expect(decide(raw, account, trustedEmail).action).toBe("deliver");
     expect(() => decide(answer(), account, trustedEmail)).toThrow("invalid_route_answer");
   }
@@ -80,4 +80,30 @@ test("body truncation respects JSON escaping and remaining request space", () =>
     expect(native.input[0]!.content[0]!.data.body.length).toBeGreaterThan(0);
     expect(Buffer.byteLength(JSON.stringify(native))).toBeLessThanOrEqual(65_536);
   }
+});
+
+test("phishing has a separate threshold and stays available to trusted senders", () => {
+  const configured = { ...account, probability: .5 };
+  for (const score of [.749, .75]) {
+    const raw = answer();
+    raw.answers.route = { type: "choice", choice: "suspicious", confidence: score,
+      probabilities: { suspicious: score, file_receipts: 0, deliver: 1 - score, verify: 0 } };
+    const decision = decide(raw, configured, email);
+    expect(decision.choice).toBe("suspicious");
+    expect(decision.action).toBe(score >= .75 ? "suspicious" : "deliver");
+  }
+  const custom = { ...configured, labels: [{ id: "custom", name: "Clefmail/Suspicious", description: "Existing Gmail label" }] };
+  expect(Object.keys(request(custom, email, "clef").questions.route.criteria)).toEqual(["suspicious", "deliver", "verify"]);
+});
+
+test("a winning filing category uses combined filing probability and leaves a winning delivery alone", () => {
+  const configured = { ...account, labels: [...account.labels, { id: "updates", name: "Updates", description: "Routine updates" }] };
+  expect(configured.probability).toBe(.70);
+  function classify(choice: string, receipts: number, updates: number, deliver: number) {
+    const probabilities = { file_receipts: receipts, file_updates: updates, deliver, verify: 0, suspicious: 0 };
+    return decide({ model: "test", answers: { route: { type: "choice", choice, confidence: .9, probabilities } } }, configured, email);
+  }
+  expect(classify("file_receipts", .46, .24, .30)).toMatchObject({ action: "file", label: "receipts", actionProbability: .70 });
+  expect(classify("file_receipts", .46, .23, .31)).toMatchObject({ action: "deliver", reason: "low_probability" });
+  expect(classify("deliver", .30, .31, .39)).toMatchObject({ action: "deliver", reason: null });
 });

@@ -104,8 +104,8 @@ test("runtime label lookup never creates missing labels; explicit setup does", a
     }));
   await expect(client.labels(account)).rejects.toThrow("gmail_label_missing_run_setup");
   expect(created).toBe(0);
-  expect(await client.labels(account, true)).toEqual({ processed: "", held: "Label_2", options: { receipts: "Label_1" } });
-  expect(created).toBe(2);
+  expect(await client.labels(account, true)).toEqual({ processed: "", held: "Label_3", options: { receipts: "Label_1", "Clefmail/Suspicious": "Label_2" } });
+  expect(created).toBe(3);
 });
 
 test("label creation reads back missing type and rejects a system label", async () => {
@@ -126,7 +126,7 @@ test("label creation reads back missing type and rejects a system label", async 
         throw new Error("Unexpected request");
       }));
     if (type === "user") {
-      expect(await client.labels(account, true)).toEqual({ processed: "", held: "Label_2", options: { receipts: "Label_1" } });
+      expect(await client.labels(account, true)).toEqual({ processed: "", held: "Label_3", options: { receipts: "Label_1", "Clefmail/Suspicious": "Label_2" } });
     } else {
       await expect(client.labels(account, true)).rejects.toThrow("system_label_not_allowed");
     }
@@ -145,10 +145,10 @@ test("OpenAI Decisions sends one bounded request and routes by the chosen probab
     expect(payload.model).toBe("gpt-6-luna");
     expect(payload.input[0].content[0]).toMatchObject({ type: "input_json", data: { body: email.body, senderContext: trusted.senderContext } });
     expect(payload.questions.map((q: any) => q.name)).toEqual(["route"]);
-    expect(payload.questions[0].choices.map((c: any) => c.value)).toEqual(["file_receipts", "deliver"]);
+    expect(payload.questions[0].choices.map((c: any) => c.value)).toEqual(["file_receipts", "suspicious", "deliver"]);
     return json({ model: payload.model, answers: [
       { type: "choice", name: "route", choice: "file_receipts", confidence: .94, probabilities: [
-        { value: "file_receipts", probability: .94 }, { value: "deliver", probability: .06 }] },
+        { value: "file_receipts", probability: .94 }, { value: "suspicious", probability: 0 }, { value: "deliver", probability: .06 }] },
     ] });
   }));
   expect(await classifier.classify(account, trusted)).toMatchObject({label: "receipts", action: "file", actionProbability: .94});

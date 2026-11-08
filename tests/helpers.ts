@@ -18,7 +18,7 @@ export const email: EmailText = {
 };
 export const answer = (p = 0.99) => ({
   model: "jev-test", answers: { route: { type: "choice", choice: "file_receipts", confidence: .99,
-    probabilities: { file_receipts: p, deliver: 1-p, verify: 0 } } },
+    probabilities: { suspicious: 0, file_receipts: p, deliver: 1-p, verify: 0 } } },
 });
 export const decision: Decision = { action: "file", label: "receipts", actionProbability: .99, reason: null };
 export const verifyDecision: Decision = { ...decision, action: "verify", label: null };
@@ -59,7 +59,7 @@ export class FakeGmail implements GmailPort {
   profileEmail = account.email;
   profileHistory = "300";
   pages: HistoryPage[] = [{ historyId: "200", history: [{ id: "150", messagesAdded: [{ message: { id: "a1" } }] }] }];
-  labelMap: LabelMap = { processed: "Label_done", held: "Label_held", options: { receipts: "Label_receipts" } };
+  labelMap: LabelMap = { processed: "Label_done", held: "Label_held", options: { receipts: "Label_receipts", "Clefmail/Suspicious": "Label_suspicious" } };
   async profile() { return { emailAddress: this.profileEmail, historyId: this.profileHistory }; }
   async history(cursor: string, token?: string) {
     this.historyCalls.push([cursor, token]);

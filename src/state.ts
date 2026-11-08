@@ -20,7 +20,9 @@ export interface StateStore {
 
 export class GcsStateStore implements StateStore {
   private storage = new Storage({
-    retryOptions: { maxRetries: 2, totalTimeout: 10, maxRetryDelay: 1 },
+    // Live deliveries and inbox batches share a checkpoint. Back off when Cloud
+    // Storage throttles writes so a failed release need not wait for lease expiry.
+    retryOptions: { maxRetries: 6, totalTimeout: 30, maxRetryDelay: 8 },
   });
   constructor(private bucket: string) {}
 

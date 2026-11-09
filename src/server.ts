@@ -41,7 +41,8 @@ async function main() {
       });
       const response = await handler(request);
       res.writeHead(response.status, {
-        "Content-Type": "text/plain", "Cache-Control": "no-store",
+        // Fetch exposes lowercase field names. Keep defaults in the same case so each field is written once.
+        "content-type": "text/plain", "cache-control": "no-store",
         ...Object.fromEntries(response.headers),
       });
       res.end(await response.text());

@@ -9,7 +9,7 @@
     "check": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "test": "bun test ./tests",
-    "check:full": "bun run check && bun run test && bun run build",
+    "check:full": "bun run check && bun run test && bun run build && node --test tests/server-headers.mjs",
     "authorize": "bun scripts/authorize.ts",
     "setup": "bun scripts/setup.ts",
     "preview": "bun scripts/preview.ts"

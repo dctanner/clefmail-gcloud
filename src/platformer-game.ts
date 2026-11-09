@@ -650,7 +650,6 @@ export function mountGame(blocks: number[], onWin: (moves: number[][]) => void):
     }
 
     if (phase === 'over') banner(overText, 'Press any control to try again');
-    else if (phase === 'won') banner('Delivered! Thank you', '');
   }
 
   function draw(now: number, alpha: number) {

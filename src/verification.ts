@@ -209,7 +209,7 @@ export class Verification {
     return !!record && record.status !== "pending";
   }
 
-  async complete(account: Account, key: string, token: string): Promise<void> {
+  async complete(account: Account, key: string, token: string): Promise<number> {
     const session = await MailboxSession.acquire(this.deps.state, account.id, this.now);
     try {
       const context = await this.context(account, key, session);
@@ -225,12 +225,13 @@ export class Verification {
         // finish journals the pending-to-verifying transition before writing Gmail.
         if (record.status !== "pending") await context.save(record);
       }
-      await this.finish(account, key, record, gmail, session, context.save);
+      return await this.finish(account, key, record, gmail, session, context.save);
     } finally { await session.release(); }
   }
 
   private async finish(account: Account, key: string, record: SenderRecord, gmail: GmailPort,
-    session: MailboxSession, save: (record: SenderRecord) => Promise<void>): Promise<void> {
+    session: MailboxSession, save: (record: SenderRecord) => Promise<void>): Promise<number> {
+    let inboxMessages = 0;
     if (record.status === "pending") { record.status = "verifying"; await save(record); }
     await session.assertOwned();
     if (!record.test) await gmail.addContact(record.email); // Test records never change sender trust.
@@ -248,6 +249,7 @@ export class Verification {
           await session.assertOwned();
           await gmail.releaseHeld(item.id, labels!.held, restoreInbox, verifiedLabel);
         }
+        if (restoreInbox || message.labelIds?.includes("INBOX")) inboxMessages++;
       } catch (error) {
         if (!(error instanceof HttpError) || error.service !== "gmail" || error.status !== 404) throw error;
       }
@@ -263,6 +265,7 @@ export class Verification {
     }
     record.status = "verified";
     await save(record);
+    return inboxMessages;
   }
 }
 

@@ -15,7 +15,7 @@ const post = (path: string, data: unknown) => new Request(origin + path, { metho
 
 test("platformer serves its own page and requires a completed run before releasing mail", async () => {
   let completions = 0;
-  const handler = createVerificationHandler(config, { complete: async () => { completions++; } }, secret,
+  const handler = createVerificationHandler(config, { complete: async () => { completions++; return 1; } }, secret,
     Object.assign(async () => { throw Error("Unexpected external request"); }, { preconnect: fetch.preconnect }));
   const page = await handler(new Request(origin + "/verify"));
   expect(await page.text()).toContain('id="game"');
@@ -27,7 +27,7 @@ test("platformer serves its own page and requires a completed run before releasi
   for (const challenge of [true, "won", { ticket: course.ticket, moves: [[2, 160]] }])
     expect((await handler(post("/verify", { ...link, challenge }))).status).toBe(400);
   expect(completions).toBe(0);
-  expect(() => createVerificationHandler(config, { complete: async () => {} }, "short")).toThrow();
+  expect(() => createVerificationHandler(config, { complete: async () => 0 }, "short")).toThrow();
   expect(() => configSchema.parse({ ...config, verification: { publicUrl: origin } })).toThrow();
 });
 

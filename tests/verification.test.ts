@@ -139,7 +139,7 @@ test("verification restores held messages, adds contact, sends success once and 
   await f.processor.notification(protectedAccount, "200");
   await next(f, "a2");
   const record = await f.record();
-  await f.verification.complete(protectedAccount, digest(sender), record.token);
+  expect(await f.verification.complete(protectedAccount, digest(sender), record.token)).toBe(2);
   expect(f.gmail.contacts.has(sender)).toBe(true);
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
   expect(f.gmail.messages.get("a2")!.labelIds).toContain("INBOX");
@@ -147,7 +147,7 @@ test("verification restores held messages, adds contact, sends success once and 
   expect(f.gmail.messages.get("a2")!.labelIds).not.toContain("Label_held");
   expect(f.gmail.notices).toHaveLength(2);
   expect(f.gmail.notices[1]!.to).toBe(sender);
-  await f.verification.complete(protectedAccount, digest(sender), record.token);
+  expect(await f.verification.complete(protectedAccount, digest(sender), record.token)).toBe(0);
   expect(f.gmail.notices).toHaveLength(2);
   await next(f, "a3", "300");
   expect(f.gmail.messages.get("a3")!.labelIds).toContain("INBOX");
@@ -215,7 +215,7 @@ test("verification never resurrects trash/spam or mail already archived before q
   f.gmail.messages.set("a1", message("a1", []));
   await f.processor.notification(protectedAccount, "200");
   await next(f, "a2"); f.gmail.messages.get("a2")!.labelIds = ["TRASH", "Label_done", "Label_held"];
-  await f.verification.complete(protectedAccount, digest(sender), (await f.record()).token);
+  expect(await f.verification.complete(protectedAccount, digest(sender), (await f.record()).token)).toBe(0);
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("INBOX");
   expect(f.gmail.messages.get("a2")!.labelIds).not.toContain("INBOX");
   expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_held");
@@ -338,9 +338,9 @@ test("test subject requires exact case and spacing, with a single Subject header
   expect(() => configSchema.parse({ provider: { kind: "jev" }, accounts: [a] })).toThrow();
 });
 
-function handlerFixture(overrides: object = {}) {
+function handlerFixture(overrides: object = {}, inboxMessages = 1) {
   const token = "x".repeat(43); let completions = 0, challenges = 0;
-  const handler = createVerificationHandler(config, { complete: async () => { completions++; } }, "secret",
+  const handler = createVerificationHandler(config, { complete: async () => { completions++; return inboxMessages; } }, "secret",
     (async (_url: URL | RequestInfo, init?: RequestInit) => {
       challenges++;
       expect(new URLSearchParams(init?.body as URLSearchParams).get("secret")).toBe("secret");
@@ -370,6 +370,17 @@ test("server verifies Turnstile success, hostname, action and token binding befo
     expect(f.completions()).toBe(0);
   }
   const f = handlerFixture(); expect((await f.handler(f.request())).status).toBe(200); expect(f.completions()).toBe(1);
+});
+
+test("the completion page only confirms delivery for mail in the inbox", async () => {
+  for (const [count, message] of [
+    [0, "Your email address is verified. You can close this page."],
+    [1, "Your email has been delivered to the recipient’s inbox."],
+    [2, "Your 2 emails have been delivered to the recipient’s inbox."],
+  ] as const) {
+    const f = handlerFixture({}, count);
+    expect(await (await f.handler(f.request())).text()).toBe(message);
+  }
 });
 
 test("invalid origins, missing proof, oversized and invalid account inputs never complete", async () => {

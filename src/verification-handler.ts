@@ -75,8 +75,10 @@ export function createVerificationHandler(config: Config, verification: Pick<Ver
             result.action !== "verify_sender" || result.cdata !== digest(input.token))
           return reply("Human verification failed. Please try again.", 400);
       }
-      await verification.complete(account, input.sender, input.token);
-      return reply("Verified! Your held inbox messages have been released. You can close this page.");
+      const inboxMessages = await verification.complete(account, input.sender, input.token);
+      if (inboxMessages === 1) return reply("Your email has been delivered to the recipient’s inbox.");
+      if (inboxMessages > 1) return reply(`Your ${inboxMessages} emails have been delivered to the recipient’s inbox.`);
+      return reply("Your email address is verified. You can close this page.");
     } catch (error) {
       const code = errorCode(error);
       if (code === "invalid_verification_link") return reply("Invalid or expired verification link.", 400);

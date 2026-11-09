@@ -5,17 +5,21 @@ import { errorCode, log, SafeError } from "./errors.js";
 import { jsonRequest, type Fetch } from "./http.js";
 import { digest, verificationAccount, type Verification } from "./verification.js";
 
-const inputSchema = z.object({
+import { completedCourse, gameProof, startCourse } from "./platformer-proof.js";
+import { platformerPage } from "./platformer-page.js";
+
+const linkSchema = z.object({
   account: z.string().regex(/^[a-z][a-z0-9_-]{0,49}$/),
   sender: z.string().regex(/^[a-f0-9]{64}$/),
   token: z.string().regex(/^[a-zA-Z0-9_-]{43}$/),
-  challenge: z.string().min(1).max(2048),
 }).strict();
 
 export function createVerificationHandler(config: Config, verification: Pick<Verification, "complete">,
   secret: string, fetcher: Fetch = fetch, logger = log) {
   if (!config.verification || !secret) throw new SafeError("verification_not_configured");
   const settings = config.verification;
+  const game = settings.captcha === "platformer";
+  if (game && Buffer.byteLength(secret) < 32) throw new SafeError("platformer_secret_too_short");
   const origin = new URL(settings.publicUrl).origin;
   return async (request: Request): Promise<Response> => {
     const headers = {
@@ -27,12 +31,14 @@ export function createVerificationHandler(config: Config, verification: Pick<Ver
     const url = new URL(request.url);
     if (url.pathname === "/healthz" && request.method === "GET") return reply("ok");
     // Public mode cannot reach either privileged mail-processing endpoint.
-    if (url.pathname !== "/verify") return reply("not found", 404);
-    if (request.method === "GET") {
+    const startingGame = game && url.pathname === "/verify/game";
+    if (!startingGame && url.pathname !== "/verify") return reply("not found", 404);
+    if (request.method === "GET" && !startingGame) {
       const nonce = randomBytes(18).toString("base64");
-      return new Response(page(settings.siteKey, nonce), { headers: {
+      const cloudflare = game ? "" : " https://challenges.cloudflare.com";
+      return new Response(game ? platformerPage(nonce) : page(settings.siteKey!, nonce), { headers: {
         ...headers, "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
+        "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'${cloudflare}; frame-src ${game ? "'none'" : "https://challenges.cloudflare.com"}; connect-src 'self'${cloudflare}; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
       } });
     }
     if (request.method !== "POST") return reply("method not allowed", 405);
@@ -41,20 +47,31 @@ export function createVerificationHandler(config: Config, verification: Pick<Ver
     try {
       const text = await request.text();
       if (Buffer.byteLength(text) > 4096) return reply("request too large", 413);
-      let input: z.infer<typeof inputSchema>;
-      try { input = inputSchema.parse(JSON.parse(text)); }
-      catch { return reply("Invalid verification request.", 400); }
+      let body: unknown;
+      try { body = JSON.parse(text); } catch { return reply("Invalid verification request.", 400); }
+      const link = (startingGame ? linkSchema : linkSchema.extend({ challenge: z.unknown() })).safeParse(body);
+      if (!link.success) return reply("Invalid verification request.", 400);
+      const input = link.data;
       const account = verificationAccount(config, input.account);
       if (!account) return reply("Invalid or expired verification link.", 400);
-      const result = z.object({
-        success: z.boolean(), hostname: z.string().optional(), action: z.string().optional(),
-        cdata: z.string().optional(),
-      }).parse(await jsonRequest("turnstile", "https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-        method: "POST", body: new URLSearchParams({ secret, response: input.challenge }),
-      }, { fetch: fetcher, signal: AbortSignal.timeout(15_000), maxBytes: 16_384 }));
-      if (!result.success || result.hostname !== new URL(origin).hostname ||
-          result.action !== "verify_sender" || result.cdata !== digest(input.token))
-        return reply("Human verification failed. Please try again.", 400);
+      if (startingGame) return Response.json(startCourse(secret, input), { headers: { ...headers, "Content-Type": "application/json" } });
+      const challenge = "challenge" in input ? input.challenge : undefined;
+      if (game) {
+        const proof = gameProof.safeParse(challenge);
+        if (!proof.success || !completedCourse(secret, input, proof.data))
+          return reply("Your run could not be verified. Play again to retry.", 400);
+      } else {
+        if (typeof challenge !== "string" || !challenge.length || challenge.length > 2048) return reply("Invalid verification request.", 400);
+        const result = z.object({
+          success: z.boolean(), hostname: z.string().optional(), action: z.string().optional(),
+          cdata: z.string().optional(),
+        }).parse(await jsonRequest("turnstile", "https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+          method: "POST", body: new URLSearchParams({ secret, response: challenge }),
+        }, { fetch: fetcher, signal: AbortSignal.timeout(15_000), maxBytes: 16_384 }));
+        if (!result.success || result.hostname !== new URL(origin).hostname ||
+            result.action !== "verify_sender" || result.cdata !== digest(input.token))
+          return reply("Human verification failed. Please try again.", 400);
+      }
       await verification.complete(account, input.sender, input.token);
       return reply("Verified! Your held inbox messages have been released. You can close this page.");
     } catch (error) {

@@ -69,6 +69,8 @@ Clefmail checks the claimed identity against the sender and the destinations of 
 
 ### Human verification
 
+The public service defaults to Cloudflare Turnstile. For a two-jump delivery game, set `verification.captcha` to `"platformer"` and bind `PLATFORMER_SECRET` on the public service. See the [captcha setup](docs/VERIFICATION.md#choose-a-captcha).
+
 For messages that remain in the inbox and lack an expected-mail bypass, Clefmail checks Google Contacts, saved verification status and retained Gmail correspondence to decide whether a sender needs verification. Existing contacts and previously verified senders can reach the inbox. Earlier correspondence also bypasses the human check, though AI archiving can still apply to a sender outside your contacts. A plus-tagged reply address is recognized when the reply references a retained sent message to its base address.
 
 Further mail from a sender awaiting verification is classified first. Only messages assigned `verify` with a score of at least `verificationThreshold` can join the hold. Clefmail reuses the pending challenge while its link remains valid. Messages moved to Trash or Spam stay there when verification completes, and mail originally archived by a Gmail filter stays archived.
@@ -258,7 +260,7 @@ The commands above are for **initial creation**. If a secret already exists, ins
 
 ## 6. Deploy and start processing
 
-Complete the [verification service setup](docs/VERIFICATION.md#deployment-sequence) before enabling processing with the default configuration. Set the real verification URL and Turnstile site key in `config.json`. For initial provisioning, temporarily set `humanVerification: false` until the public service is ready, then enable it on both services.
+Complete the [verification service setup](docs/VERIFICATION.md#deployment-sequence) before enabling processing with the default configuration. Set the real verification URL in `config.json`. If you use Turnstile, include its site key. For initial provisioning, temporarily set `humanVerification: false` until the public service is ready, then enable it on both services.
 
 Use the uploaded configuration version that contains your chosen mailbox and archiving settings.
 
@@ -368,7 +370,7 @@ bun run check:full  # all three
 | `src/gmail.ts`, `src/text.ts` | Gmail API access and bounded MIME/text extraction |
 | `src/processor.ts`, `src/state.ts` | History processing, watch renewal and storage leases |
 | `src/handler.ts`, `src/server.ts` | Private Pub/Sub/renewal endpoints and isolated public service mode |
-| `src/verification.ts`, `src/verification-handler.ts`, `src/sender.ts` | Sender quarantine state, Turnstile page/validation, completion and sender parsing |
+| `src/verification.ts`, `src/verification-handler.ts`, `src/sender.ts` | Held mail, sender verification and release |
 | `scripts/` | OAuth, label setup, inbox processing, sample preview and deployment |
 | `tests/` | Synthetic provider, processing, storage and deployment tests |
 

@@ -43,8 +43,9 @@ export const configSchema = z.object({
       return url.protocol === "https:" && !url.username && !url.password &&
         url.pathname === "/" && !url.search && !url.hash;
     }, "Use an HTTPS origin without a path"),
-    siteKey: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/),
-  }).strict().optional(),
+    captcha: z.enum(["turnstile", "platformer"]).default("turnstile"),
+    siteKey: z.string().regex(/^[a-zA-Z0-9_-]{1,200}$/).optional(),
+  }).strict().refine(v => v.captcha !== "turnstile" || !!v.siteKey, "Turnstile requires a site key").optional(),
   provider: z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("clef"),

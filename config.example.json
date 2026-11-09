@@ -38,6 +38,7 @@
   ],
   "verification": {
     "publicUrl": "https://YOUR-VERIFICATION-SERVICE.run.app",
+    "captcha": "turnstile",
     "siteKey": "YOUR_PUBLIC_TURNSTILE_SITE_KEY"
   }
 }

@@ -18,7 +18,7 @@ async function main() {
   env("GOOGLE_CLIENT_ID");
   env("GOOGLE_CLIENT_SECRET");
   const handler = mode === "verification"
-    ? createVerificationHandler(config, createVerification(config), env("TURNSTILE_SECRET_KEY"))
+    ? createVerificationHandler(config, createVerification(config), env(config.verification?.captcha === "platformer" ? "PLATFORMER_SECRET" : "TURNSTILE_SECRET_KEY"))
     : createHandler(config, createProcessor(config), subscription, topic);
   const server = createServer(async (req, res) => {
     try {

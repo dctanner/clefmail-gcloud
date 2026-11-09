@@ -14,13 +14,15 @@ PUBLIC_SERVICE="${SERVICE}-verify"
 RUNTIME="${SERVICE}-verify@${PROJECT}.iam.gserviceaccount.com"
 IFS=',' read -ra bindings <<< "$VERIFICATION_SECRET_BINDINGS"
 for binding in "${bindings[@]}"; do
-  [[ "$binding" =~ ^(/secrets/config\.json|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|TURNSTILE_SECRET_KEY|GMAIL_[A-Z0-9_]+_REFRESH_TOKEN)=([a-zA-Z0-9_-]+):([1-9][0-9]*)$ ]] ||
+  [[ "$binding" =~ ^(/secrets/config\.json|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|TURNSTILE_SECRET_KEY|PLATFORMER_SECRET|GMAIL_[A-Z0-9_]+_REFRESH_TOKEN)=([a-zA-Z0-9_-]+):([1-9][0-9]*)$ ]] ||
     { echo "Use known NAME=secret:numeric-version bindings only." >&2; exit 1; }
   name="${binding%%=*}"
   [[ ",${seen:-}," != *",${name},"* ]] || { echo "Duplicate secret binding" >&2; exit 1; }
   seen="${seen:-}${seen:+,}${name}"
 done
-for required in /secrets/config.json GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET TURNSTILE_SECRET_KEY; do
+[[ ",${seen}," == *,TURNSTILE_SECRET_KEY,* || ",${seen}," == *,PLATFORMER_SECRET,* ]] ||
+  { echo "Bind the secret for your chosen captcha." >&2; exit 1; }
+for required in /secrets/config.json GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
   [[ ",${VERIFICATION_SECRET_BINDINGS}," == *",${required}="* ]] ||
     { echo "Missing required secret binding: ${required}" >&2; exit 1; }
 done
@@ -45,4 +47,4 @@ g run deploy "$PUBLIC_SERVICE" --source=. --region="$REGION" --service-account="
   --set-secrets="$VERIFICATION_SECRET_BINDINGS" --quiet
 URL="$(g run services describe "$PUBLIC_SERVICE" --region="$REGION" --format='value(status.url)')"
 printf 'Public verification service submitted: %s/verify\n' "$URL"
-printf 'Set verification.publicUrl to this HTTPS origin (or your mapped domain), configure its Turnstile hostname, and redeploy both configs before enabling humanVerification. Verify /pubsub and /renew return 404 here; keep the processor private.\n'
+printf 'Set verification.publicUrl to this HTTPS origin (or your mapped domain), configure your chosen captcha, and redeploy both configs before enabling humanVerification. Verify /pubsub and /renew return 404 here; keep the processor private.\n'

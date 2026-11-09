@@ -13,7 +13,7 @@ Live processing and manual inbox batches share `Clefmail/Held`. When the sender 
 3. For a sender without state, search retained Gmail incoming/sent metadata for exact correspondence. Earlier incoming mail or an email the mailbox has sent to the address exempts the sender from verification. Existing correspondence does **not** exempt non-contacts from the ordinary AI archive policy.
 4. Check retained human-sent mail to the exact company domain. A match exempts every sender at that domain, even if the model suggests verification. Shared mailbox providers and Clefmail notices cannot establish company trust.
 5. For an unknown sender whose action is `verify`, persist a pending record, archive the incoming message, and send a verification link. The message gets the `Clefmail/Held` label. Further messages from that sender are also classified first; those kept in the inbox join the hold, without repeated challenges while the link is valid.
-6. The sender opens the link and completes Cloudflare Turnstile. Server-side validation checks success, hostname, action, and binding to this particular verification capability. GET requests and email link scanners cannot verify someone.
+6. The sender opens the link and completes the selected captcha. With Turnstile, the verifier checks the hostname and action and matches the result to the email link. In game mode it replays the two jumps before releasing mail. GET requests and email link scanners cannot verify someone.
 7. Under the same mailbox lease used by processing, create the sender's Google Contact, restore held messages that were originally in the inbox, and send a success email **to the verified sender**. Messages that were already archived by a Gmail filter, deleted, moved to Spam/Trash, or made drafts are not restored.
 8. Later mail bypasses quarantine. Contacts and durable verified-sender state protect it from the AI archiver.
 
@@ -40,7 +40,7 @@ This upgrade requires the **People API** and the OAuth scope `https://www.google
 
 A Google Workspace administrator or an OAuth publishing/verification change may be necessary. Reauthorization is a user/browser action, not something the runtime can do unattended.
 
-## Configure Turnstile
+## Configure Turnstile (default)
 
 Create a Cloudflare Turnstile widget for the public verification service's hostname. Keep hostname validation enabled. Use its public site key in configuration and store its **secret key** in Google Secret Manager, for example as `clefmail-turnstile-secret`.
 
@@ -64,7 +64,7 @@ The same image has two mutually exclusive startup modes:
 | Mode | Reachability | Routes | Extra secret |
 | --- | --- | --- | --- |
 | `SERVICE_MODE=processor` (default) | Private Cloud Run IAM/internal ingress | `/pubsub`, `/renew`, `/healthz` | Classifier key |
-| `SERVICE_MODE=verification` | Public HTTPS | `/verify`, `/healthz` only | Turnstile secret |
+| `SERVICE_MODE=verification` | Public HTTPS | `/verify`, `/healthz`, plus `POST /verify/game` in game mode | Secret for the selected captcha |
 
 Never grant public access to the processor or proxy it through the verification service. The public mode never constructs the processor/classifier and requires neither a classifier key nor Pub/Sub configuration. Both services need mailbox OAuth credentials and the **same** state bucket, because successful verification modifies Gmail and the mailbox lease serializes those changes.
 
@@ -136,3 +136,11 @@ Spam, Trash, drafts, malformed sender headers, and the automatic-reply safeguard
 still apply. Replies with `Re:` in the subject follow the ordinary mail policy.
 Set `humanVerificationTest: false` to stop starting tests; complete outstanding
 links before disabling it.
+
+## Choose a captcha
+
+Existing configurations use Turnstile. To switch to the game, set `"captcha": "platformer"` inside the existing `verification` object. Keep `publicUrl`. The game can run without a Turnstile site key.
+
+Generate a private signing key with `openssl rand -hex 32` and store it in Secret Manager. Bind its version as `PLATFORMER_SECRET` in `VERIFICATION_SECRET_BINDINGS` on the public service. Publish the updated config and redeploy. To switch back, select `"turnstile"`, supply its `siteKey`, and bind `TURNSTILE_SECRET_KEY`.
+
+Senders use the arrow keys or A and D to move. Up or Space jumps, and on-screen buttons support touch. The verifier checks the recorded moves against a signed, ten-minute course tied to the email link before releasing mail. A simple game offers less resistance to automation than a managed anti-bot service.

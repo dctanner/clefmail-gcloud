@@ -32,13 +32,16 @@ export function createVerificationHandler(config: Config, verification: Pick<Ver
     if (url.pathname === "/healthz" && request.method === "GET") return reply("ok");
     // Public mode cannot reach either privileged mail-processing endpoint.
     const startingGame = game && url.pathname === "/verify/game";
-    if (!startingGame && url.pathname !== "/verify") return reply("not found", 404);
+    const practice = url.pathname === "/play";
+    if (practice && request.method !== "GET") return reply("method not allowed", 405);
+    if (!practice && !startingGame && url.pathname !== "/verify") return reply("not found", 404);
     if (request.method === "GET" && !startingGame) {
       const nonce = randomBytes(18).toString("base64");
-      const cloudflare = game ? "" : " https://challenges.cloudflare.com";
-      return new Response(game ? platformerPage(nonce) : page(settings.siteKey!, nonce), { headers: {
+      const platformer = practice || game;
+      const cloudflare = platformer ? "" : " https://challenges.cloudflare.com";
+      return new Response(platformer ? platformerPage(nonce, practice ? "practice" : "verify") : page(settings.siteKey!, nonce), { headers: {
         ...headers, "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'${cloudflare}; frame-src ${game ? "'none'" : "https://challenges.cloudflare.com"}; connect-src 'self'${cloudflare}; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
+        "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'${cloudflare}; frame-src ${platformer ? "'none'" : "https://challenges.cloudflare.com"}; connect-src ${practice ? "'none'" : "'self'" + cloudflare}; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
       } });
     }
     if (request.method !== "POST") return reply("method not allowed", 405);

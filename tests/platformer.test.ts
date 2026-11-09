@@ -64,3 +64,18 @@ test("a finished course is valid only for its original link and time window", ()
   expect(completedCourse(secret, link, proof, now + 10)).toBe(false);
   expect(completedCourse(secret, { ...link, token: "y".repeat(43) }, proof, now + 10_000)).toBe(false);
 });
+
+test("anyone can play a practice run with either captcha selected", async () => {
+  for (const captcha of ["platformer", "turnstile"] as const) {
+    const handler = createVerificationHandler({
+      ...config, verification: { publicUrl: origin, captcha, siteKey: "example" },
+    }, { complete: async () => { throw Error("Practice must never release mail"); } }, secret);
+    const page = await handler(new Request(origin + "/play"));
+    expect(page.status).toBe(200);
+    expect(page.headers.get("Content-Security-Policy")).toContain("connect-src 'none'");
+    const html = await page.text();
+    expect(html).toContain("Practice run");
+    expect(html).not.toContain("/verify");
+    expect((await handler(post("/play", link))).status).toBe(405);
+  }
+});

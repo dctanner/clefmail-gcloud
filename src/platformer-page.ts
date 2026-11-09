@@ -1,6 +1,6 @@
 import { mountGame, newRunner, tick } from "./platformer-game.js";
 
-export function platformerPage(nonce: string) {
+export function platformerPage(nonce: string, mode: "practice" | "verify" = "verify") {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mailbox run · Clefmail</title><style nonce="${nonce}">
@@ -11,7 +11,7 @@ h1{font:700 clamp(28px,7vw,46px)/1.1 Georgia,serif;margin:0}p{margin:14px 0}canv
 button{padding:10px 14px;font:inherit;border:1px solid #263748;border-radius:8px;background:#ffdf98;color:#182735;cursor:pointer}
 button:focus-visible,canvas:focus-visible{outline:3px solid #1d6478;outline-offset:3px}button:disabled{opacity:.55}
 </style></head><body><main><h1>Mailbox run</h1>
-<p>Jump over both parcels and reach the mailbox to verify your email. Move with ← → or A and D. Jump with ↑ or Space.</p>
+<p>Jump over both parcels and reach the mailbox${mode === "practice" ? "" : " to verify your email"}. Move with ← → or A and D. Jump with ↑ or Space.</p>
 <canvas id="game" width="560" height="210" tabindex="0" aria-label="Mailbox run game">This game needs a browser with canvas support.</canvas>
 <div class="controls"><button id="left" aria-label="Move left">←</button><button id="right" aria-label="Move right">→</button><button id="jump">Jump ↑</button></div>
 <p id="status" role="status" aria-live="polite">Loading your course…</p><button id="retry" hidden>Play again</button></main>
@@ -19,9 +19,27 @@ button:focus-visible,canvas:focus-visible{outline:3px solid #1d6478;outline-offs
 const newRunner = ${newRunner.toString()};
 const tick = ${tick.toString()};
 const mountGame = ${mountGame.toString()};
-const parts = location.hash.slice(1).split('/');
-history.replaceState(null, '', '/verify');
 const statusLine = document.querySelector('#status'), retry = document.querySelector('#retry');
+${mode === "practice" ? practiceScript : verificationScript}
+</script></body></html>`;
+}
+
+const practiceScript = `
+function start() {
+  retry.hidden = true;
+  statusLine.textContent = 'Practice run';
+  const blocks = [130, 330].map(x => x + Math.floor(Math.random() * 51));
+  mountGame(blocks, () => {
+    statusLine.textContent = 'Delivered! You cleared both parcels.';
+    retry.hidden = false;
+    retry.focus();
+  });
+}
+retry.addEventListener('click', start);
+start();`;
+
+const verificationScript = `const parts = location.hash.slice(1).split('/');
+history.replaceState(null, '', '/verify');
 const link = {account:parts[0],sender:parts[1],token:parts[2]};
 const post = (path, body) => fetch(path, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 let stop;
@@ -44,6 +62,4 @@ async function start() {
 }
 retry.addEventListener('click',start);
 if (parts.length === 3 && /^[a-z][a-z0-9_-]{0,49}$/.test(parts[0]) && /^[a-f0-9]{64}$/.test(parts[1]) && /^[a-zA-Z0-9_-]{43}$/.test(parts[2])) start();
-else statusLine.textContent = 'Open the complete verification link from your email.';
-</script></body></html>`;
-}
+else statusLine.textContent = 'Open the complete verification link from your email.';`;

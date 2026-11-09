@@ -64,7 +64,7 @@ The same image has two mutually exclusive startup modes:
 | Mode | Reachability | Routes | Extra secret |
 | --- | --- | --- | --- |
 | `SERVICE_MODE=processor` (default) | Private Cloud Run IAM/internal ingress | `/pubsub`, `/renew`, `/healthz` | Classifier key |
-| `SERVICE_MODE=verification` | Public HTTPS | `/verify`, `/healthz`, plus `POST /verify/game` in game mode | Secret for the selected captcha |
+| `SERVICE_MODE=verification` | Public HTTPS | `/play`, `/verify`, `/healthz`, plus `POST /verify/game` in game mode | Secret for the selected captcha |
 
 Never grant public access to the processor or proxy it through the verification service. The public mode never constructs the processor/classifier and requires neither a classifier key nor Pub/Sub configuration. Both services need mailbox OAuth credentials and the **same** state bucket, because successful verification modifies Gmail and the mailbox lease serializes those changes.
 
@@ -138,6 +138,8 @@ Set `humanVerificationTest: false` to stop starting tests; complete outstanding
 links before disabling it.
 
 ## Choose a captcha
+
+Share `/play` on your public verification service to let anyone try the game. Practice runs take place in the browser and can be replayed.
 
 Existing configurations use Turnstile. To switch to the game, set `"captcha": "platformer"` inside the existing `verification` object. Keep `publicUrl`. The game can run without a Turnstile site key.
 

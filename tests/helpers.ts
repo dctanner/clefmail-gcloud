@@ -59,7 +59,7 @@ export class FakeGmail implements GmailPort {
   profileEmail = account.email;
   profileHistory = "300";
   pages: HistoryPage[] = [{ historyId: "200", history: [{ id: "150", messagesAdded: [{ message: { id: "a1" } }] }] }];
-  labelMap: LabelMap = { processed: "Label_done", held: "Label_held", options: { receipts: "Label_receipts", "Clefmail/Suspicious": "Label_suspicious" } };
+  labelMap: LabelMap = { processed: "Label_done", held: "Label_held", verified: "Label_verified", options: { receipts: "Label_receipts", "Clefmail/Suspicious": "Label_suspicious" } };
   async profile() { return { emailAddress: this.profileEmail, historyId: this.profileHistory }; }
   async history(cursor: string, token?: string) {
     this.historyCalls.push([cursor, token]);
@@ -81,8 +81,10 @@ export class FakeGmail implements GmailPort {
   async addContact(email: string) { this.contacts.add(email); }
   async hasCorresponded() { return this.corresponded; }
   async hasDomainCorresponded() { return this.domainCorresponded; }
-  async releaseHeld(id: string, heldLabel: string, restoreInbox: boolean) {
-    await this.modify(id, restoreInbox ? ["INBOX"] : [], [heldLabel]);
+  async releaseHeld(id: string, heldLabel: string, restoreInbox: boolean, verifiedLabel?: string) {
+    const add = restoreInbox ? ["INBOX"] : [];
+    if (verifiedLabel) add.push(verifiedLabel);
+    await this.modify(id, add, [heldLabel]);
   }
   async sendNotice(to: string, subject: string, body: string, key: string) {
     if (!this.notices.some(n => n.key === key)) this.notices.push({ to, subject, body, key });

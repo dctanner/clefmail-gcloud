@@ -86,7 +86,7 @@ test("verification releases only live messages under the shared Held label", asy
   const record = await f.record();
   expect(record.pending.map(item => item.id)).toEqual(["a1"]);
   await f.verification.complete(mailbox, digest(sender), record.token);
-  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["INBOX"]);
+  expect(f.gmail.messages.get("a1")!.labelIds).toEqual(["INBOX", "Label_verified"]);
   expect(f.gmail.messages.get("a2")!.labelIds).toEqual(["Label_held"]);
 });
 
@@ -199,12 +199,13 @@ test("partial restoration failure resumes without repeating successful restores 
   const f = fixture(); await f.processor.notification(protectedAccount, "200"); await next(f, "a2");
   const token = (await f.record()).token;
   const restore = f.gmail.releaseHeld.bind(f.gmail);
-  f.gmail.releaseHeld = async (id, held, inbox) => { if (id === "a2") throw new SafeError("restore_failed"); await restore(id, held, inbox); };
+  f.gmail.releaseHeld = async (id, held, inbox, verified) => { if (id === "a2") throw new SafeError("restore_failed"); await restore(id, held, inbox, verified); };
   await expect(f.verification.complete(protectedAccount, digest(sender), token)).rejects.toThrow("restore_failed");
   expect((await f.record()).status).toBe("verifying");
   expect((await f.record()).pending.map(p => p.id)).toEqual(["a2"]);
   f.gmail.releaseHeld = restore;
-  await f.verification.complete(protectedAccount, digest(sender), token);
+  await next(f, "a3", "300"); // A live retry has no Turnstile callback of its own.
+  for (const id of ["a1", "a2"]) expect(f.gmail.messages.get(id)!.labelIds).toContain("Label_verified");
   expect(f.gmail.modifications.filter(m => m.id === "a1" && m.add.includes("INBOX"))).toHaveLength(1);
   expect(f.gmail.notices).toHaveLength(2);
 });
@@ -224,6 +225,7 @@ test("verification never resurrects trash/spam or mail already archived before q
 test("manually adding pending sender to contacts releases held mail and bypasses verification", async () => {
   const f = fixture(); await f.processor.notification(protectedAccount, "200");
   f.gmail.contacts.add(sender); await next(f, "a2");
+  expect(f.gmail.messages.get("a1")!.labelIds).not.toContain("Label_verified");
   expect(f.gmail.messages.get("a1")!.labelIds).toContain("INBOX");
   expect(f.gmail.messages.get("a2")!.labelIds).toContain("INBOX");
 });

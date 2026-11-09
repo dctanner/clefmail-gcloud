@@ -1,6 +1,6 @@
 import { customSenderDomain } from "./sender-context.js";
 import { z } from "zod";
-import { PROCESSED_LABEL, HELD_LABEL, SUSPICIOUS_LABEL, type Account } from "./config.js";
+import { PROCESSED_LABEL, HELD_LABEL, VERIFIED_LABEL, SUSPICIOUS_LABEL, type Account } from "./config.js";
 import { HttpError, SafeError } from "./errors.js";
 import { jsonRequest, type Fetch } from "./http.js";
 import type { Message } from "./text.js";
@@ -22,6 +22,7 @@ export type HistoryPage = z.infer<typeof historyPageSchema>;
 export interface LabelMap {
   processed: string;
   held: string;
+  verified: string;
   options: Record<string, string>;
 }
 export type MessageFormat = "full" | "minimal" | "metadata";
@@ -37,7 +38,7 @@ export interface GmailPort {
   addContact(email: string): Promise<void>;
   hasCorresponded(email: string, current: Message): Promise<boolean>;
   hasDomainCorresponded(domain: string): Promise<boolean>;
-  releaseHeld(id: string, heldLabel: string, restoreInbox: boolean): Promise<void>;
+  releaseHeld(id: string, heldLabel: string, restoreInbox: boolean, verifiedLabel?: string): Promise<void>;
   sendNotice(to: string, subject: string, body: string, key: string, replyTo?: string): Promise<void>;
 }
 
@@ -191,7 +192,8 @@ export class Gmail implements GmailPort {
     for (const label of account.labels) options[label.id] = await find(label.name);
     options[SUSPICIOUS_LABEL] = await find(SUSPICIOUS_LABEL);
     const held = await find(HELD_LABEL);
-    return { processed, held, options };
+    const verified = await find(VERIFIED_LABEL);
+    return { processed, held, verified, options };
   }
 
   async modify(id: string, add: string[], remove: string[], categories?: LabelMap["options"]): Promise<void> {
@@ -329,11 +331,15 @@ export class Gmail implements GmailPort {
     return false;
   }
 
-  async releaseHeld(id: string, heldLabel: string, restoreInbox: boolean): Promise<void> {
+  async releaseHeld(id: string, heldLabel: string, restoreInbox: boolean, verifiedLabel?: string): Promise<void> {
     messageId.parse(id);
-    if (!/^Label_[a-zA-Z0-9_-]+$/.test(heldLabel)) throw new SafeError("unsafe_label_mutation");
+    const validLabel = /^Label_[a-zA-Z0-9_-]+$/;
+    if (!validLabel.test(heldLabel) || (verifiedLabel !== undefined && (!validLabel.test(verifiedLabel) || verifiedLabel === heldLabel)))
+      throw new SafeError("unsafe_label_mutation");
+    const add = restoreInbox ? ["INBOX"] : [];
+    if (verifiedLabel) add.push(verifiedLabel);
     await this.call(`messages/${encodeURIComponent(id)}/modify`, {
-      addLabelIds: restoreInbox ? ["INBOX"] : [], removeLabelIds: [heldLabel],
+      addLabelIds: add, removeLabelIds: [heldLabel],
     });
   }
 

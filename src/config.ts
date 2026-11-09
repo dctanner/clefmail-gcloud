@@ -4,6 +4,7 @@ import { SafeError } from "./errors.js";
 
 export const PROCESSED_LABEL = "Clefmail/Processed";
 export const HELD_LABEL = "Clefmail/Held";
+export const VERIFIED_LABEL = "Clefmail/Verified";
 export const SUSPICIOUS_LABEL = "Clefmail/Suspicious";
 const optionSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9_-]{0,49}$/)
@@ -27,7 +28,7 @@ export const accountSchema = z.object({
   archiveThreshold: z.number().min(0.5).max(1).optional(),
   labels: z.array(optionSchema).min(1).max(20)
     // Older configurations could list the retired batch label as a category.
-    .transform(labels => labels.filter(label => label.name !== "Clefmail/Hold")),
+    .transform(labels => labels.filter(label => label.name !== "Clefmail/Hold" && label.name !== VERIFIED_LABEL)),
 }).strict().superRefine((v, ctx) => {
   for (const key of ["id", "name"] as const) {
     if (new Set(v.labels.map(l => l[key])).size !== v.labels.length)

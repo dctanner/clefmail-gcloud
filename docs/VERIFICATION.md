@@ -2,7 +2,7 @@
 
 Sender verification is ready for production. Live-mail testing is complete.
 
-Live processing and manual inbox batches share `Clefmail/Held`. Verification releases the messages recorded for that challenge. Batch holds wait for your review and send no email.
+Live processing and manual inbox batches share `Clefmail/Held`. When the sender completes the human check, Clefmail replaces Held with `Clefmail/Verified` on the messages recorded for that challenge. Batch holds wait for your review and send no email.
 
 ## Behavior
 

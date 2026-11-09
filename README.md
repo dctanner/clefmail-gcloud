@@ -25,6 +25,7 @@ The example configuration includes four category labels. You can rename these or
 | `Clefmail/Notifications` | Routine account, delivery and service updates that need no attention |
 | `Clefmail/Promotions` | Offers, marketing campaigns and product announcements |
 | `Clefmail/Suspicious` | Suspected phishing. Clefmail archives it and sends no reply. |
+| `Clefmail/Verified` | The sender completed human verification for this message. |
 | `Clefmail/Held` | Live processing holds eligible pitches for sender verification. A manual inbox batch uses the same label for pitches you can review yourself. |
 
 The model chooses one destination. When an ordinary category wins, Clefmail adds the probabilities of all ordinary categories. A total of at least 0.70 applies the winning label and archives the message in one Gmail update. For example, 46% Receipts plus 25% Notifications files the message as Receipts if Receipts is the top choice. Delivery clears earlier filing categories on that message. Clefmail tracks completed work privately in Cloud Storage.
@@ -200,7 +201,7 @@ export GMAIL_PERSONAL_REFRESH_TOKEN="$(<.secrets/personal.token)"
 bun run setup
 ```
 
-`setup` verifies the mailbox and creates the configured categories and the built-in Held and Suspicious labels. Run setup before deploying an upgrade that adds a label. **It does not read message bodies, classify messages, or start a watch.** The runtime only looks up labels; rerun setup if you deliberately change the label configuration.
+`setup` verifies the mailbox and creates the configured categories and the built-in Held, Verified and Suspicious labels. Run setup before deploying an upgrade that adds a label. **It does not read message bodies, classify messages, or start a watch.** The runtime only looks up labels; rerun setup if you deliberately change the label configuration.
 
 Bun loads `.env` automatically for local tools; Bash and `gcloud` do not. The exported token above takes precedence over the placeholder in `.env`. Do not use shell tracing (`set -x`) while handling credentials.
 

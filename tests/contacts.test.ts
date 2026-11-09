@@ -86,10 +86,10 @@ test("releasing held mail removes the held label and optionally restores INBOX",
   let inbox = true;
   const gmail = client((url, init) => {
     expect(url.pathname).toEndWith("/messages/a1/modify");
-    expect(JSON.parse(String(init.body))).toEqual({ addLabelIds: inbox ? ["INBOX"] : [], removeLabelIds: ["Label_held"] });
+    expect(JSON.parse(String(init.body))).toEqual({ addLabelIds: inbox ? ["INBOX", "Label_verified"] : [], removeLabelIds: ["Label_held"] });
     return Response.json({ id: "a1" });
   });
-  await gmail.releaseHeld("a1", "Label_held", true);
+  await gmail.releaseHeld("a1", "Label_held", true, "Label_verified");
   inbox = false;
   await gmail.releaseHeld("a1", "Label_held", false);
   await expect(gmail.releaseHeld("a1", "STARRED", true)).rejects.toThrow("unsafe_label_mutation");

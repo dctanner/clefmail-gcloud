@@ -27,6 +27,7 @@ const senderSchema = z.object({
   token: z.string().regex(/^[a-zA-Z0-9_-]{43}$/),
   expiresAt: z.number(),
   challenged: z.boolean(),
+  humanVerified: z.boolean().optional(),
   successSent: z.boolean(),
   pending: z.array(pendingSchema).max(5000),
   test: z.boolean().default(false),
@@ -219,6 +220,11 @@ export class Verification {
         throw new SafeError("invalid_verification_link");
       const gmail = this.deps.gmail(account, AbortSignal.timeout(240_000));
       await verifyMailbox(gmail, account);
+      if (record.pending.length && !record.humanVerified) {
+        record.humanVerified = true;
+        // finish journals the pending-to-verifying transition before writing Gmail.
+        if (record.status !== "pending") await context.save(record);
+      }
       await this.finish(account, key, record, gmail, session, context.save);
     } finally { await session.release(); }
   }
@@ -237,9 +243,10 @@ export class Verification {
       try {
         const message = await gmail.message(item.id, "minimal");
         const restoreInbox = item.restore && !message.labelIds?.some(l => ["SPAM", "TRASH", "DRAFT", "INBOX"].includes(l));
-        if (restoreInbox || message.labelIds?.includes(labels!.held)) {
+        const verifiedLabel = record.humanVerified ? labels!.verified : undefined;
+        if (restoreInbox || message.labelIds?.includes(labels!.held) || (verifiedLabel && !message.labelIds?.includes(verifiedLabel))) {
           await session.assertOwned();
-          await gmail.releaseHeld(item.id, labels!.held, restoreInbox);
+          await gmail.releaseHeld(item.id, labels!.held, restoreInbox, verifiedLabel);
         }
       } catch (error) {
         if (!(error instanceof HttpError) || error.service !== "gmail" || error.status !== 404) throw error;
